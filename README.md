@@ -1,5 +1,7 @@
 # ruyiPage
 
+[简体中文](./README.md) | [English](./README_EN.md)
+
 <p align="center">
   <img src="images/ruyipage.png" width="220" alt="ruyiPage logo" />
 </p>
@@ -10,7 +12,6 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/ruyiPage.svg)](https://pypi.org/project/ruyiPage/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/ruyiPage)](https://pypi.org/project/ruyiPage/)
-[![GitHub stars](https://img.shields.io/github/stars/LoseNine/ruyipage?style=social)](https://github.com/LoseNine/ruyipage)
 
 📘 项目文档：<https://0xshoulderlab.site/automation>
 
@@ -191,8 +192,10 @@
 ## 安装
 
 ```bash
-pip install ruyiPage
+pip install ruyiPage --upgrade
 ```
+
+如果你是首次安装，也可以直接用上面的命令获取最新版。
 
 安装后建议先确认：
 
@@ -1126,17 +1129,15 @@ page.extensions.uninstall(ext_id)
 
 ---
 
-## GitHub Star
+## Star History
 
-### 当前 Star 数
-
-[![GitHub stars](https://img.shields.io/github/stars/LoseNine/ruyipage?style=for-the-badge)](https://github.com/LoseNine/ruyipage)
-
-### Star 增长趋势
-
-[![Star History Chart](https://api.star-history.com/svg?repos=LoseNine/ruyipage&type=Date)](https://www.star-history.com/#LoseNine/ruyipage&Date)
-
-如果你想观察点赞 / Star 的增长趋势，上面的图会按时间维度展示变化。
+<a href="https://www.star-history.com/?repos=LoseNine%2Fruyipage&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=LoseNine/ruyipage&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=LoseNine/ruyipage&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=LoseNine/ruyipage&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
