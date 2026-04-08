@@ -20,6 +20,33 @@ Docs: <https://0xshoulderlab.site/automation>
 
 ---
 
+## Buy Me a Coffee
+
+If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
+
+<table>
+  <tr>
+    <td align="center">
+      <b>Official Account</b><br>
+      <img src="images/gzh.jpg" width="220" alt="Official account QR code" />
+    </td>
+    <td align="center">
+      <b>QQ Group</b><br>
+      <img src="images/qq.jpg" width="220" alt="QQ group QR code" />
+    </td>
+    <td align="center">
+      <b>Contact Me / WeChat</b><br>
+      <img src="images/weixin.jpg" width="220" alt="Personal WeChat QR code" />
+    </td>
+    <td align="center">
+      <b>Buy Me a Coffee</b><br>
+      <img src="images/weixingoot.jpg" width="220" alt="Donation QR code" />
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Project Positioning
 
 `ruyiPage` is a Python library focused on **Firefox browser automation**. Its underlying protocol comes from:
@@ -1176,30 +1203,3 @@ This project emphasizes:
 - adaptation to high-risk scenarios
 
 But these capabilities are limited to **lawful, compliant, and legitimate** technical research and automation scenarios.
-
----
-
-## Buy Me a Coffee
-
-If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
-
-<table>
-  <tr>
-    <td align="center">
-      <b>Official Account</b><br>
-      <img src="images/gzh.jpg" width="220" alt="Official account QR code" />
-    </td>
-    <td align="center">
-      <b>QQ Group</b><br>
-      <img src="images/qq.jpg" width="220" alt="QQ group QR code" />
-    </td>
-    <td align="center">
-      <b>Contact Me / WeChat</b><br>
-      <img src="images/weixin.jpg" width="220" alt="Personal WeChat QR code" />
-    </td>
-    <td align="center">
-      <b>Buy Me a Coffee</b><br>
-      <img src="images/weixingoot.jpg" width="220" alt="Donation QR code" />
-    </td>
-  </tr>
-</table>

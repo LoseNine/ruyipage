@@ -20,6 +20,33 @@
 
 ---
 
+## 请我喝咖啡
+
+如果这个项目对你有帮助，欢迎请我喝杯咖啡，支持我继续完善 `ruyiPage`。
+
+<table>
+  <tr>
+    <td align="center">
+      <b>公众号</b><br>
+      <img src="images/gzh.jpg" width="220" alt="公众号二维码" />
+    </td>
+    <td align="center">
+      <b>QQ 社群</b><br>
+      <img src="images/qq.jpg" width="220" alt="QQ 社群二维码" />
+    </td>
+    <td align="center">
+      <b>联系我 / 个人微信</b><br>
+      <img src="images/weixin.jpg" width="220" alt="个人微信二维码" />
+    </td>
+    <td align="center">
+      <b>请我喝咖啡</b><br>
+      <img src="images/weixingoot.jpg" width="220" alt="收款码" />
+    </td>
+  </tr>
+</table>
+
+---
+
 ## 项目定位
 
 `ruyiPage` 是一个面向 **Firefox 浏览器自动化** 的 Python 库，底层协议来自：
@@ -1212,30 +1239,3 @@ page.extensions.uninstall(ext_id)
 - 高风控场景适配
 
 但这些能力仅限于**合法、合规、正当**的技术研究和自动化应用场景。
-
----
-
-## 请我喝咖啡
-
-如果这个项目对你有帮助，欢迎请我喝杯咖啡，支持我继续完善 `ruyiPage`。
-
-<table>
-  <tr>
-    <td align="center">
-      <b>公众号</b><br>
-      <img src="images/gzh.jpg" width="220" alt="公众号二维码" />
-    </td>
-    <td align="center">
-      <b>QQ 社群</b><br>
-      <img src="images/qq.jpg" width="220" alt="QQ 社群二维码" />
-    </td>
-    <td align="center">
-      <b>联系我 / 个人微信</b><br>
-      <img src="images/weixin.jpg" width="220" alt="个人微信二维码" />
-    </td>
-    <td align="center">
-      <b>请我喝咖啡</b><br>
-      <img src="images/weixingoot.jpg" width="220" alt="收款码" />
-    </td>
-  </tr>
-</table>
