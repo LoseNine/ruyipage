@@ -14,7 +14,7 @@ from queue import Queue, Empty
 
 from ..errors import BiDiError, PageDisconnectedError
 
-logger = logging.getLogger('ruyipage')
+logger = logging.getLogger("ruyipage")
 
 
 class BrowserBiDiDriver(object):
@@ -83,31 +83,32 @@ class BrowserBiDiDriver(object):
 
         import websocket
 
+        if not hasattr(websocket, "create_connection"):
+            raise ImportError(
+                "当前导入的 websocket 模块不正确，缺少 create_connection。\n"
+                "请卸载错误的 websocket 包并安装 websocket-client：\n"
+                "  pip uninstall -y websocket websocket-client\n"
+                "  pip install websocket-client"
+            )
+
         if ws_url is None:
-            ws_url = 'ws://{}/session'.format(self.address)
+            ws_url = "ws://{}/session".format(self.address)
 
         self._ws = websocket.create_connection(
-            ws_url,
-            timeout=30,
-            suppress_origin=True,
-            enable_multithread=True
+            ws_url, timeout=30, suppress_origin=True, enable_multithread=True
         )
 
         self._is_running = True
 
         # 启动接收线程
         self._recv_th = threading.Thread(
-            target=self._recv_loop,
-            name='ruyipage-recv',
-            daemon=True
+            target=self._recv_loop, name="ruyipage-recv", daemon=True
         )
         self._recv_th.start()
 
         # 启动事件处理线程
         self._event_th = threading.Thread(
-            target=self._handle_event_loop,
-            name='ruyipage-events',
-            daemon=True
+            target=self._handle_event_loop, name="ruyipage-events", daemon=True
         )
         self._event_th.start()
 
@@ -164,6 +165,7 @@ class BrowserBiDiDriver(object):
 
         # 清空事件队列（原子替换，线程安全）
         from queue import Queue
+
         self._event_queue = Queue()
 
         self.alert_flag = False
@@ -186,10 +188,11 @@ class BrowserBiDiDriver(object):
             PageDisconnectedError: 连接断开
         """
         if not self._is_running:
-            raise PageDisconnectedError('WebSocket 连接未建立')
+            raise PageDisconnectedError("WebSocket 连接未建立")
 
         if timeout is None:
             from .._functions.settings import Settings
+
             timeout = Settings.bidi_timeout
 
         # 生成唯一 ID
@@ -203,15 +206,15 @@ class BrowserBiDiDriver(object):
             self._method_results[cmd_id] = response_queue
 
         # 构建并发送消息
-        msg = {'id': cmd_id, 'method': method, 'params': params or {}}
+        msg = {"id": cmd_id, "method": method, "params": params or {}}
         try:
             with self._ws_send_lock:
                 self._ws.send(json.dumps(msg))
-            logger.debug('发送 -> %d %s', cmd_id, method)
+            logger.debug("发送 -> %d %s", cmd_id, method)
         except Exception as e:
             with self._results_lock:
                 self._method_results.pop(cmd_id, None)
-            raise PageDisconnectedError('发送消息失败: {}'.format(e))
+            raise PageDisconnectedError("发送消息失败: {}".format(e))
 
         # 阻塞等待响应
         try:
@@ -219,23 +222,23 @@ class BrowserBiDiDriver(object):
         except Empty:
             with self._results_lock:
                 self._method_results.pop(cmd_id, None)
-            raise BiDiError('timeout', '命令超时: {} ({}s)'.format(method, timeout))
+            raise BiDiError("timeout", "命令超时: {} ({}s)".format(method, timeout))
 
         if result is None:
-            raise PageDisconnectedError('连接已断开')
+            raise PageDisconnectedError("连接已断开")
 
         with self._results_lock:
             self._method_results.pop(cmd_id, None)
 
         # 处理错误响应
-        if result.get('type') == 'error':
+        if result.get("type") == "error":
             raise BiDiError(
-                result.get('error', 'unknown error'),
-                result.get('message', ''),
-                result.get('stacktrace', '')
+                result.get("error", "unknown error"),
+                result.get("message", ""),
+                result.get("stacktrace", ""),
             )
 
-        return result.get('result', {})
+        return result.get("result", {})
 
     def set_callback(self, event, callback, context=None, immediate=False):
         """注册事件回调
@@ -248,7 +251,9 @@ class BrowserBiDiDriver(object):
         """
         key = (event, context)
         with self._handlers_lock:
-            handlers = self._immediate_event_handlers if immediate else self._event_handlers
+            handlers = (
+                self._immediate_event_handlers if immediate else self._event_handlers
+            )
             if callback is None:
                 handlers.pop(key, None)
             else:
@@ -275,33 +280,37 @@ class BrowserBiDiDriver(object):
                 msg = json.loads(raw)
 
                 # 命令响应
-                if 'id' in msg and msg['id'] is not None:
-                    cmd_id = msg['id']
+                if "id" in msg and msg["id"] is not None:
+                    cmd_id = msg["id"]
                     with self._results_lock:
                         q = self._method_results.get(cmd_id)
                     if q:
                         q.put(msg)
                     else:
-                        logger.debug('收到未知ID的响应: %d', cmd_id)
+                        logger.debug("收到未知ID的响应: %d", cmd_id)
                     continue
 
                 # 事件消息 - 处理 type='event' 或无 type 但有 method 的情况
                 # Firefox 有时发送不带 'type' 字段的原始事件
-                msg_type = msg.get('type')
-                has_method = 'method' in msg
+                msg_type = msg.get("type")
+                has_method = "method" in msg
 
-                if msg_type == 'event' or has_method:
-                    event_method = msg.get('method', '')
-                    event_params = msg.get('params', {})
-                    event_context = event_params.get('context')
+                if msg_type == "event" or has_method:
+                    event_method = msg.get("method", "")
+                    event_params = msg.get("params", {})
+                    event_context = event_params.get("context")
 
-                    logger.debug('事件 <- %s (context=%s, type=%s)',
-                                 event_method, event_context, msg_type)
+                    logger.debug(
+                        "事件 <- %s (context=%s, type=%s)",
+                        event_method,
+                        event_context,
+                        msg_type,
+                    )
 
                     # alert_flag 处理
-                    if event_method == 'browsingContext.userPromptOpened':
+                    if event_method == "browsingContext.userPromptOpened":
                         self.alert_flag = True
-                    elif event_method == 'browsingContext.userPromptClosed':
+                    elif event_method == "browsingContext.userPromptClosed":
                         self.alert_flag = False
 
                     # 处理 immediate 回调（在短生命周期线程中执行，避免阻塞 recv 循环）
@@ -310,7 +319,9 @@ class BrowserBiDiDriver(object):
 
                     for key, handler in handlers_to_check:
                         evt, ctx = key
-                        if evt == event_method and (ctx is None or ctx == event_context):
+                        if evt == event_method and (
+                            ctx is None or ctx == event_context
+                        ):
                             self._handle_immediate_event(handler, event_params)
 
                     # 放入事件队列（由事件线程处理）
@@ -318,11 +329,11 @@ class BrowserBiDiDriver(object):
                 else:
                     # 未知消息类型
                     if msg_type is not None:
-                        logger.debug('忽略未知消息类型: %s', msg_type)
+                        logger.debug("忽略未知消息类型: %s", msg_type)
 
             except Exception as e:
                 if self._is_running:
-                    logger.warning('WebSocket 接收错误: %s', e)
+                    logger.warning("WebSocket 接收错误: %s", e)
                     self._is_running = False
                     # 唤醒所有等待中的命令
                     with self._results_lock:
@@ -343,13 +354,14 @@ class BrowserBiDiDriver(object):
             handler: 回调函数
             event_params: 事件参数字典
         """
+
         def _run():
             try:
                 handler(event_params)
             except Exception as e:
-                logger.error('Immediate 事件处理错误: %s', e)
+                logger.error("Immediate 事件处理错误: %s", e)
 
-        t = threading.Thread(target=_run, name='ruyipage-immediate-evt', daemon=True)
+        t = threading.Thread(target=_run, name="ruyipage-immediate-evt", daemon=True)
         t.start()
 
     def _handle_event_loop(self):
@@ -374,7 +386,7 @@ class BrowserBiDiDriver(object):
                     try:
                         handler(event_params)
                     except Exception as e:
-                        logger.error('事件处理错误 %s: %s', event_method, e)
+                        logger.error("事件处理错误 %s: %s", event_method, e)
 
 
 class ContextDriver(object):
@@ -421,26 +433,32 @@ class ContextDriver(object):
 
         # 需要注入 context 的方法前缀
         needs_context = (
-            'browsingContext.', 'input.', 'emulation.',
+            "browsingContext.",
+            "input.",
+            "emulation.",
         )
-        needs_target_context = ('script.evaluate', 'script.callFunction')
+        needs_target_context = ("script.evaluate", "script.callFunction")
         needs_partition_context = (
-            'storage.getCookies', 'storage.setCookie', 'storage.deleteCookies',
+            "storage.getCookies",
+            "storage.setCookie",
+            "storage.deleteCookies",
         )
 
-        if method.startswith(needs_context) and 'context' not in params:
-            params['context'] = self.context_id
+        if method.startswith(needs_context) and "context" not in params:
+            params["context"] = self.context_id
         elif method in needs_target_context:
-            if 'target' not in params:
-                params['target'] = {'context': self.context_id}
-            elif 'context' not in params.get('target', {}):
-                params.setdefault('target', {})['context'] = self.context_id
+            if "target" not in params:
+                params["target"] = {"context": self.context_id}
+            elif "context" not in params.get("target", {}):
+                params.setdefault("target", {})["context"] = self.context_id
         elif method in needs_partition_context:
             # storage 方法需要 partition.context 来限定上下文
-            if 'partition' not in params:
-                params['partition'] = {'type': 'context', 'context': self.context_id}
-            elif 'context' not in params.get('partition', {}):
-                params.setdefault('partition', {}).update({'type': 'context', 'context': self.context_id})
+            if "partition" not in params:
+                params["partition"] = {"type": "context", "context": self.context_id}
+            elif "context" not in params.get("partition", {}):
+                params.setdefault("partition", {}).update(
+                    {"type": "context", "context": self.context_id}
+                )
 
         return self._browser_driver.run(method, params, timeout)
 

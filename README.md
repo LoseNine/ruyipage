@@ -197,10 +197,39 @@ pip install ruyiPage --upgrade
 
 如果你是首次安装，也可以直接用上面的命令获取最新版。
 
+如果你是从源码运行，或给学员分发项目源码，建议同时安装项目依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+当前运行时依赖至少包括：
+
+```bash
+pip install websocket-client
+```
+
 安装后建议先确认：
 
 ```bash
 python -c "import ruyipage; print(ruyipage.__version__)"
+```
+
+### 常见依赖问题
+
+`ruyiPage` 依赖的是 `websocket-client`，不是 `websocket`。
+
+如果你装错了包，常见报错会是：
+
+```bash
+AttributeError: module 'websocket' has no attribute 'create_connection'
+```
+
+可直接执行：
+
+```bash
+pip uninstall -y websocket websocket-client
+pip install websocket-client
 ```
 
 ---
