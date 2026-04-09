@@ -13,8 +13,10 @@ import logging
 import tempfile
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .driver import BrowserBiDiDriver, ContextDriver
+from .._adapter.remote_agent import get_bidi_ws_url
 from .._configs.firefox_options import FirefoxOptions
 from .._bidi import network as bidi_network
 from .._bidi import session as bidi_session
@@ -22,6 +24,355 @@ from .._bidi import browsing_context as bidi_context
 from ..errors import BrowserConnectError, BrowserLaunchError
 
 logger = logging.getLogger("ruyipage")
+
+
+DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS = (
+    "firefox.exe",
+    "flowerbrowser.exe",
+    "adsbrowser.exe",
+)
+
+DEFAULT_FIREFOX_COMMANDLINE_PATTERNS = (
+    "--remote-debugging-port",
+    "--marionette",
+    "-contentproc",
+    "-isforbrowser",
+    "adspower",
+    "flower",
+    "firefox",
+)
+
+
+def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
+    """探测 address 是否为可接管的 Firefox BiDi 实例。"""
+    host, port = address.rsplit(":", 1)
+    try:
+        port = int(port)
+    except Exception:
+        return None
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect((host, port))
+        sock.close()
+    except Exception:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return None
+
+    driver = None
+    try:
+        ws_url = get_bidi_ws_url(host, port, timeout=max(1, timeout))
+        driver = BrowserBiDiDriver(address)
+        driver.start(ws_url)
+        status = bidi_session.status(driver)
+        ready = status.get("ready", False)
+        message = status.get("message", "")
+
+        # 对可接管实例的定义要更严格：
+        # 仅当远端允许我们创建新 session 时，才认为这个端口可以 attach。
+        # 像 AdsPower / FlowerBrowser 这类场景，session.status 会返回
+        # "Session already started"，但不会把已有 session 交给新连接复用，
+        # 后续任何 browsingContext 命令都会报 invalid session id。
+        if not ready:
+            return None
+
+        result = bidi_session.new(driver, {})
+        session_id = result.get("sessionId", "")
+        driver.session_id = session_id
+        windows = []
+        contexts = []
+        try:
+            windows = driver.run("browser.getClientWindows").get("clientWindows", [])
+        except Exception:
+            windows = []
+        try:
+            contexts = bidi_context.get_tree(driver, max_depth=0).get("contexts", [])
+        except Exception:
+            contexts = []
+
+        return {
+            "address": address,
+            "host": host,
+            "port": port,
+            "ready": ready,
+            "message": message,
+            "ws_url": ws_url,
+            "driver": driver if keep_driver else None,
+            "session_id": session_id,
+            "window_count": len(windows),
+            "tab_count": len(contexts),
+            "client_windows": windows,
+            "contexts": [
+                {
+                    "context": c.get("context", ""),
+                    "url": c.get("url", ""),
+                    "user_context": c.get("userContext", "default"),
+                    "original_opener": c.get("originalOpener", None),
+                }
+                for c in contexts
+            ],
+        }
+    except Exception:
+        return None
+    finally:
+        if driver and not keep_driver:
+            try:
+                driver.stop()
+            except Exception:
+                with BrowserBiDiDriver._lock:
+                    BrowserBiDiDriver._BROWSERS.pop(address, None)
+
+
+def create_browser_from_probe_info(info):
+    """根据探测结果复用已建立的 BiDi 连接，直接构造 Firefox 对象。"""
+    address = info["address"]
+    driver = info.get("driver")
+    if driver is None:
+        raise BrowserConnectError("探测结果中缺少可复用的 BiDi 连接")
+
+    opts = FirefoxOptions().set_address(address).existing_only(True)
+    browser = Firefox.__new__(Firefox, address)
+    browser._initialized = False
+    browser._options = opts
+    browser._address = address
+    browser._driver = driver
+    browser._process = None
+    browser._session_id = info.get("session_id", "")
+    browser._contexts = {}
+    browser._context_ids = [
+        c.get("context", "") for c in (info.get("contexts") or []) if c.get("context")
+    ]
+    browser._context_ids_lock = threading.Lock()
+    browser._auto_profile = None
+    browser._quit_lock = threading.Lock()
+    browser._proxy_auth_intercept_id = None
+    browser._proxy_auth_subscription_id = None
+    browser._initialized = True
+    return browser
+
+
+def find_existing_browsers(
+    host="127.0.0.1", start_port=9222, end_port=9322, timeout=0.5, max_workers=32
+):
+    """扫描本机可接管的 Firefox BiDi 浏览器实例。
+
+    使用线程池并发探测端口，显著缩短大范围随机端口扫描时间。
+    返回结果保持按端口升序，避免影响既有调用方行为。
+    """
+    ports = list(range(int(start_port), int(end_port) + 1))
+    if not ports:
+        return []
+
+    workers = max(1, min(int(max_workers), len(ports)))
+    result = []
+
+    with ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="ruyipage-scan"
+    ) as executor:
+        future_map = {
+            executor.submit(
+                _probe_bidi_address, "{}:{}".format(host, port), timeout=timeout
+            ): port
+            for port in ports
+        }
+
+        for future in as_completed(future_map):
+            try:
+                info = future.result()
+            except Exception:
+                info = None
+            if info:
+                result.append(info)
+
+    result.sort(key=lambda item: int(item.get("port", 0)))
+    return result
+
+
+def find_existing_browsers_by_process(
+    host="127.0.0.1",
+    timeout=0.5,
+    max_workers=32,
+    keep_driver=False,
+    process_name_patterns=None,
+    commandline_patterns=None,
+):
+    """按进程特征发现可接管的 Firefox BiDi 浏览器实例。
+
+    先从系统进程筛出目标浏览器（Firefox / FlowerBrowser 等），
+    再读取这些进程监听的本地端口，最后仅对候选端口做 BiDi 探测。
+    """
+    if process_name_patterns is None:
+        process_name_patterns = DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS
+    if commandline_patterns is None:
+        commandline_patterns = DEFAULT_FIREFOX_COMMANDLINE_PATTERNS
+
+    pids = set()
+    ports = set()
+
+    if sys.platform == "win32":
+        ps_proc = (
+            "Get-CimInstance Win32_Process | "
+            "Select-Object ProcessId, Name, CommandLine | "
+            "ConvertTo-Json -Compress"
+        )
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps_proc],
+                stderr=subprocess.DEVNULL,
+            )
+            import json
+
+            data = json.loads(out.decode(errors="ignore") or "[]")
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                name = str(item.get("Name") or "").lower()
+                cmd = str(item.get("CommandLine") or "").lower()
+                pid = int(item.get("ProcessId") or 0)
+                if not pid:
+                    continue
+                name_ok = any(p in name for p in process_name_patterns)
+                cmd_ok = any(p in cmd for p in commandline_patterns)
+                if name_ok or cmd_ok:
+                    pids.add(pid)
+        except Exception:
+            pass
+
+        if pids:
+            ps_net = (
+                "Get-NetTCPConnection -State Listen | "
+                "Select-Object LocalAddress, LocalPort, OwningProcess | "
+                "ConvertTo-Json -Compress"
+            )
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command", ps_net],
+                    stderr=subprocess.DEVNULL,
+                )
+                import json
+
+                data = json.loads(out.decode(errors="ignore") or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    pid = int(item.get("OwningProcess") or 0)
+                    addr = str(item.get("LocalAddress") or "")
+                    port = int(item.get("LocalPort") or 0)
+                    if (
+                        pid in pids
+                        and port > 0
+                        and addr in ("127.0.0.1", "::1", "0.0.0.0")
+                    ):
+                        ports.add(port)
+            except Exception:
+                pass
+
+    if not ports:
+        return []
+
+    workers = max(1, min(int(max_workers), len(ports)))
+    result = []
+    with ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="ruyipage-proc-scan"
+    ) as executor:
+        future_map = {
+            executor.submit(
+                _probe_bidi_address,
+                "{}:{}".format(host, port),
+                timeout,
+                keep_driver,
+            ): port
+            for port in sorted(ports)
+        }
+        for future in as_completed(future_map):
+            try:
+                info = future.result()
+            except Exception:
+                info = None
+            if info:
+                info["scanned_ports"] = sorted(ports)
+                result.append(info)
+
+    result.sort(key=lambda item: int(item.get("port", 0)))
+    return result
+
+
+def find_candidate_ports_by_process(
+    process_name_patterns=None,
+    commandline_patterns=None,
+):
+    """按进程特征返回候选监听端口（仅发现，不做 BiDi 探测）。"""
+    if process_name_patterns is None:
+        process_name_patterns = DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS
+    if commandline_patterns is None:
+        commandline_patterns = DEFAULT_FIREFOX_COMMANDLINE_PATTERNS
+
+    pids = set()
+    ports = set()
+
+    if sys.platform == "win32":
+        ps_proc = (
+            "Get-CimInstance Win32_Process | "
+            "Select-Object ProcessId, Name, CommandLine | "
+            "ConvertTo-Json -Compress"
+        )
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps_proc],
+                stderr=subprocess.DEVNULL,
+            )
+            import json
+
+            data = json.loads(out.decode(errors="ignore") or "[]")
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                name = str(item.get("Name") or "").lower()
+                cmd = str(item.get("CommandLine") or "").lower()
+                pid = int(item.get("ProcessId") or 0)
+                if not pid:
+                    continue
+                name_ok = any(p in name for p in process_name_patterns)
+                cmd_ok = any(p in cmd for p in commandline_patterns)
+                if name_ok or cmd_ok:
+                    pids.add(pid)
+        except Exception:
+            pass
+
+        if pids:
+            ps_net = (
+                "Get-NetTCPConnection -State Listen | "
+                "Select-Object LocalAddress, LocalPort, OwningProcess | "
+                "ConvertTo-Json -Compress"
+            )
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command", ps_net],
+                    stderr=subprocess.DEVNULL,
+                )
+                import json
+
+                data = json.loads(out.decode(errors="ignore") or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    pid = int(item.get("OwningProcess") or 0)
+                    addr = str(item.get("LocalAddress") or "")
+                    port = int(item.get("LocalPort") or 0)
+                    if (
+                        pid in pids
+                        and port > 0
+                        and addr in ("127.0.0.1", "::1", "0.0.0.0")
+                    ):
+                        ports.add(port)
+            except Exception:
+                pass
+
+    return sorted(ports)
 
 
 class Firefox(object):
@@ -372,7 +723,9 @@ class Firefox(object):
             self._teardown_proxy_auth()
             self._driver.stop()
         self._driver = BrowserBiDiDriver(self._address)
-        self._driver.start()
+        host, port_str = self._address.rsplit(":", 1)
+        ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
+        self._driver.start(ws_url)
         self._create_session()
         self._subscribe_events()
         self._setup_proxy_auth()
@@ -392,8 +745,8 @@ class Firefox(object):
                 return
         except BrowserConnectError as e:
             if "__stuck_session__" in str(e):
-                # 孤儿会话，需要重启 Firefox 来清理
-                logger.warning("检测到 Firefox 孤儿会话，尝试重启浏览器...")
+                # 仅在现有会话确实不可接管时，才回退到重启清理。
+                logger.warning("检测到不可接管的 Firefox 会话，尝试重启浏览器...")
                 self._restart_firefox_for_stuck_session()
                 # 重启后重新连接
                 for i in range(self._options.retry_times + 1):
@@ -520,8 +873,10 @@ class Firefox(object):
             return False
 
         try:
+            host, port = self._address.rsplit(":", 1)
+            ws_url = get_bidi_ws_url(host, int(port), timeout=5)
             self._driver = BrowserBiDiDriver(self._address)
-            self._driver.start()
+            self._driver.start(ws_url)
             self._create_session()
             self._subscribe_events()
             self._setup_proxy_auth()
@@ -683,7 +1038,7 @@ class Firefox(object):
         处理各种 Firefox BiDi session 状态：
         1. 无活跃 session → session.new 成功
         2. 当前连接已有 session → session.end + session.new
-        3. 另一个连接的孤儿 session（最棘手）→ 需要重启 Firefox
+        3. 另一个连接已持有 session → 优先接管当前会话，失败时再回退重启
         """
         # 先检查状态
         try:
@@ -733,10 +1088,12 @@ class Firefox(object):
             except Exception as e:
                 err_str = str(e).lower()
                 if "maximum" in err_str or "session not created" in err_str:
-                    # 孤儿 session，需要重启 Firefox
-                    raise BrowserConnectError(
-                        "__stuck_session__: Firefox 有无法回收的孤儿会话，需要重启"
-                    )
+                    # Firefox 已存在活跃 BiDi 会话时，优先直接接管当前会话，
+                    # 避免把可复用的浏览器误判成必须重启的孤儿会话。
+                    self._session_id = ""
+                    self._driver.session_id = ""
+                    logger.info("检测到已有 Firefox BiDi 会话，直接接管当前浏览器")
+                    return
                 raise
 
     def _subscribe_events(self):

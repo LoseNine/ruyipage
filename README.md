@@ -127,14 +127,12 @@ page.quit()
 --remote-debugging-port=9222
 ```
 
-如果后台会把它改写成随机端口，也可以直接使用自动探测接管。
+如果后台会把它改写成随机端口，也可以直接使用按进程特征的自动探测接管。
 
 ```python
-from ruyipage import auto_attach_exist_browser
+from ruyipage import auto_attach_exist_browser_by_process
 
-page = auto_attach_exist_browser(
-    start_port=6000,
-    end_port=20000,
+page = auto_attach_exist_browser_by_process(
     latest_tab=True,
 )
 
@@ -148,7 +146,7 @@ print(page.url)
 - 你想先手动打开 Firefox，再让 `ruyiPage` 接管
 - 你想先启动指纹浏览器，再从业务脚本里连进去
 - 你使用的是 ADS / FlowerBrowser，真实调试端口会随机变化
-- 你同机开了多个 Firefox，希望先扫描出哪些端口可接管
+- 你不想手动维护端口范围，希望直接按 Firefox 进程特征自动探测
 
 ### 浏览器路径和 userdir 是什么
 
@@ -440,18 +438,15 @@ page.refresh()
 它会：
 
 - 提示你先手工启动 Firefox 或 Firefox 指纹浏览器
-- 优先扫描固定端口附近的可接管实例
-- 如果没有固定端口，再自动暴力扫描随机端口
+- 直接按 Firefox / ADS / FlowerBrowser 进程特征自动探测并接管
 - 接管成功后直接操作当前浏览器实例
 
 核心写法：
 
 ```python
-from ruyipage import auto_attach_exist_browser
+from ruyipage import auto_attach_exist_browser_by_process
 
-page = auto_attach_exist_browser(
-    start_port=6000,
-    end_port=20000,
+page = auto_attach_exist_browser_by_process(
     latest_tab=True,
 )
 
@@ -464,7 +459,7 @@ print(page.url)
 
 - 已经打开了 ADS / FlowerBrowser 之类的 Firefox 指纹浏览器
 - 浏览器后台会把 `--remote-debugging-port=9222` 改成随机端口
-- 想直接自动探测真实端口并接管已有实例
+- 想直接按进程特征自动探测真实端口并接管已有实例
 
 ### 5. HTTP 密码代理示例
 
@@ -510,18 +505,15 @@ page.get("http://ipinfo.io/json")
 它会：
 
 - 提示如何给指纹浏览器追加 `--remote-debugging-port`
-- 先扫描当前机器上可接管的 Firefox 实例
-- 固定端口找不到时自动暴力扫描随机端口
-- 再用 `ruyiPage` 接管已经打开的浏览器窗口
+- 直接按 Firefox 进程特征自动接管已经打开的浏览器窗口
+- 避免让用户自己维护随机端口范围
 
 核心写法：
 
 ```python
-from ruyipage import auto_attach_exist_browser
+from ruyipage import auto_attach_exist_browser_by_process
 
-page = auto_attach_exist_browser(
-    start_port=6000,
-    end_port=20000,
+page = auto_attach_exist_browser_by_process(
     latest_tab=True,
 )
 
@@ -532,8 +524,8 @@ print(page.url)
 适用场景：
 
 - 想先手工或外部程序启动 Firefox，再交给 `ruyiPage`
-- 想从多个可接管实例里先探测，再决定接哪一个
 - 想自动适配 ADS / FlowerBrowser 这类随机端口指纹浏览器
+- 不想手动维护端口范围，只想直接自动探测并接管
 - 想把“启动浏览器”和“业务自动化”拆成两段流程
 
 ---

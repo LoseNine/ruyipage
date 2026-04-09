@@ -127,14 +127,12 @@ If the browser lets you set a fixed startup argument, it is recommended to add:
 --remote-debugging-port=9222
 ```
 
-If the browser backend rewrites it to a random port, you can still use automatic port discovery.
+If the browser backend rewrites it to a random port, you can still use process-based automatic discovery.
 
 ```python
-from ruyipage import auto_attach_exist_browser
+from ruyipage import auto_attach_exist_browser_by_process
 
-page = auto_attach_exist_browser(
-    start_port=6000,
-    end_port=20000,
+page = auto_attach_exist_browser_by_process(
     latest_tab=True,
 )
 
@@ -148,7 +146,7 @@ Useful when:
 - you want to open Firefox manually first and let `ruyiPage` take over afterward
 - you want to launch a fingerprint browser first and connect from your business script later
 - you are using ADS / FlowerBrowser and the real debugging port changes every run
-- you have multiple Firefox instances and want to discover which ports are attachable
+- you do not want to maintain a port range manually and prefer process-feature-based discovery
 
 ### What `browser_path` and `user_dir` Mean
 
@@ -442,18 +440,15 @@ File: `examples/39_attach_exist_browser.py`
 It will:
 
 - remind you to start Firefox or a Firefox fingerprint browser manually first
-- scan fixed ports first for an attachable instance
-- automatically brute-scan random ports if no fixed-port instance is found
-- attach to the live browser instance and operate it directly
+- automatically detect and attach based on Firefox / ADS / FlowerBrowser process features
+- operate the live browser instance directly after takeover
 
 Core pattern:
 
 ```python
-from ruyipage import auto_attach_exist_browser
+from ruyipage import auto_attach_exist_browser_by_process
 
-page = auto_attach_exist_browser(
-    start_port=6000,
-    end_port=20000,
+page = auto_attach_exist_browser_by_process(
     latest_tab=True,
 )
 
@@ -466,7 +461,7 @@ Suitable for:
 
 - an already-open ADS / FlowerBrowser style Firefox fingerprint browser
 - browser backends that rewrite `--remote-debugging-port=9222` to a random port
-- automatically discovering the real port and attaching to the running instance
+- automatically discovering the real port from process features and attaching to the running instance
 
 ### 5. HTTP Proxy Auth Example
 

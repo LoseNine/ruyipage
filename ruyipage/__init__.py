@@ -17,11 +17,21 @@ RuyiPage - 基于 WebDriver BiDi 协议的 Firefox 浏览器自动化框架
     page = FirefoxPage(opts)
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from .version import __version__
+from ._pages.firefox_base import FirefoxBase
 from ._pages.firefox_page import FirefoxPage
 from ._pages.firefox_tab import FirefoxTab
 from ._pages.firefox_frame import FirefoxFrame
-from ._base.browser import Firefox, find_existing_browsers
+from ._base.browser import (
+    Firefox,
+    find_existing_browsers,
+    find_existing_browsers_by_process,
+    find_candidate_ports_by_process,
+    _probe_bidi_address,
+    create_browser_from_probe_info,
+)
 from ._configs.firefox_options import FirefoxOptions
 from ._elements.firefox_element import FirefoxElement
 from ._elements.none_element import NoneElement
@@ -57,6 +67,105 @@ from .errors import (
     CanNotClickError,
     LocatorError,
 )
+
+
+def _page_from_existing_browser_info(info, tab_index=1, latest_tab=False):
+    """兼容旧内部调用，转发到探测连接复用逻辑。"""
+    return _page_from_live_probe_info(
+        info,
+        tab_index=tab_index,
+        latest_tab=latest_tab,
+    )
+
+
+def _page_from_live_probe_info(info, tab_index=1, latest_tab=False):
+    """直接基于一次成功的 live probe 结果构造 FirefoxPage。"""
+    address = info["address"]
+    browser = create_browser_from_probe_info(info)
+    page = FirefoxPage.__new__(FirefoxPage)
+    FirefoxPage._PAGES[address] = page
+    FirefoxBase.__init__(page)
+    page._page_initialized = True
+    page._firefox = browser
+
+    tab_ids = browser.tab_ids
+    if tab_ids:
+        if latest_tab:
+            ctx_id = tab_ids[-1]
+        else:
+            idx = tab_index - 1 if isinstance(tab_index, int) and tab_index > 0 else 0
+            if isinstance(tab_index, int) and -len(tab_ids) <= idx < len(tab_ids):
+                ctx_id = tab_ids[idx]
+            else:
+                ctx_id = tab_ids[0]
+    else:
+        ctx_id = None
+
+    if not ctx_id:
+        from ._bidi import browsing_context as bidi_context
+
+        result = bidi_context.create(browser.driver, "tab")
+        ctx_id = result.get("context", "")
+
+    page._init_context(browser, ctx_id)
+    return page
+
+
+def _page_from_probe(address, timeout=0.2, tab_index=1, latest_tab=False):
+    """直接基于探测阶段成功建立的连接构造 FirefoxPage。"""
+    info = _probe_bidi_address(address, timeout=timeout, keep_driver=True)
+    if not info:
+        return None
+    return _page_from_live_probe_info(
+        info,
+        tab_index=tab_index,
+        latest_tab=latest_tab,
+    )
+
+
+def _scan_live_probes(host, start_port, end_port, timeout=0.2, max_workers=64):
+    """并发扫描端口，并保留成功探测到的 live BiDi 连接。"""
+    ports = list(range(int(start_port), int(end_port) + 1))
+    if not ports:
+        return []
+
+    workers = max(1, min(int(max_workers), len(ports)))
+    results = []
+    with ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="ruyipage-live-probe"
+    ) as executor:
+        future_map = {
+            executor.submit(
+                _probe_bidi_address,
+                "{}:{}".format(host, port),
+                timeout,
+                True,
+            ): port
+            for port in ports
+        }
+        for future in as_completed(future_map):
+            try:
+                info = future.result()
+            except Exception:
+                info = None
+            if info:
+                results.append(info)
+
+    results.sort(key=lambda item: int(item.get("port", 0)))
+    return results
+
+
+def _cleanup_live_probe_infos(infos, keep_address=None):
+    """关闭未被选中的 live probe 连接。"""
+    for item in infos:
+        if item.get("address") == keep_address:
+            continue
+        driver = item.get("driver")
+        if driver:
+            try:
+                driver.stop()
+            except Exception:
+                pass
 
 
 def launch(
@@ -157,6 +266,7 @@ def auto_attach_exist_browser(
     start_port=9222,
     end_port=65535,
     timeout=0.2,
+    max_workers=64,
     tab_index=1,
     latest_tab=False,
 ):
@@ -171,12 +281,15 @@ def auto_attach_exist_browser(
         start_port: 扫描起始端口
         end_port: 扫描结束端口
         timeout: 单端口探测超时（秒）
+        max_workers: 并发扫描线程数，默认 32
         tab_index: 接管后默认切到第几个 tab，按 1 开始计数
         latest_tab: True 时优先切到最新 tab，忽略 tab_index
 
     Returns:
         FirefoxPage
     """
+    errors = []
+
     if address:
         try:
             return attach_exist_browser(
@@ -184,14 +297,15 @@ def auto_attach_exist_browser(
                 tab_index=tab_index,
                 latest_tab=latest_tab,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append("{} -> {}".format(address, e))
 
-    browsers = find_exist_browsers(
+    browsers = _scan_live_probes(
         host=host,
         start_port=start_port,
         end_port=end_port,
         timeout=timeout,
+        max_workers=max_workers,
     )
     if not browsers:
         raise RuntimeError(
@@ -199,18 +313,103 @@ def auto_attach_exist_browser(
             "或扩大扫描端口范围。"
         )
 
-    return attach_exist_browser(
-        address=browsers[0]["address"],
-        tab_index=tab_index,
-        latest_tab=latest_tab,
+    for item in browsers:
+        try:
+            page = _page_from_live_probe_info(
+                item,
+                tab_index=tab_index,
+                latest_tab=latest_tab,
+            )
+            if page:
+                _cleanup_live_probe_infos(browsers, keep_address=item["address"])
+                return page
+            raise RuntimeError("探测成功但无法复用连接")
+        except Exception as e:
+            errors.append("{} -> {}".format(item["address"], e))
+
+    _cleanup_live_probe_infos(browsers)
+
+    detail = "；".join(errors[:3]) if errors else ""
+    raise RuntimeError(
+        "发现了可探测端口，但没有可真正接管的 Firefox 会话。"
+        "这通常表示指纹浏览器已被自身或其他客户端占用了唯一 BiDi session。"
+        + (" 失败详情: {}".format(detail) if detail else "")
     )
 
 
-def find_exist_browsers(host="127.0.0.1", start_port=9222, end_port=9322, timeout=0.5):
+def find_exist_browsers(
+    host="127.0.0.1",
+    start_port=9222,
+    end_port=9322,
+    timeout=0.5,
+    max_workers=32,
+):
     """发现当前机器上可接管的 Firefox 浏览器列表。"""
     return find_existing_browsers(
-        host=host, start_port=start_port, end_port=end_port, timeout=timeout
+        host=host,
+        start_port=start_port,
+        end_port=end_port,
+        timeout=timeout,
+        max_workers=max_workers,
     )
+
+
+def find_exist_browsers_by_process(
+    host="127.0.0.1",
+    timeout=0.5,
+    max_workers=32,
+):
+    """按进程特征发现可接管浏览器（推荐 ADS / FlowerBrowser 场景）。"""
+    return find_existing_browsers_by_process(
+        host=host,
+        timeout=timeout,
+        max_workers=max_workers,
+        keep_driver=False,
+    )
+
+
+def auto_attach_exist_browser_by_process(
+    host="127.0.0.1",
+    timeout=0.2,
+    max_workers=32,
+    tab_index=1,
+    latest_tab=False,
+):
+    """按进程特征自动探测并接管已打开浏览器。"""
+    browsers = find_existing_browsers_by_process(
+        host=host,
+        timeout=timeout,
+        max_workers=max_workers,
+        keep_driver=True,
+    )
+    if not browsers:
+        raise RuntimeError(
+            "未从进程特征中发现可接管的 Firefox 端口，请确认浏览器已启动。"
+        )
+
+    errors = []
+    for item in browsers:
+        try:
+            return _page_from_live_probe_info(
+                item,
+                tab_index=tab_index,
+                latest_tab=latest_tab,
+            )
+        except Exception as e:
+            errors.append("{} -> {}".format(item["address"], e))
+
+    _cleanup_live_probe_infos(browsers)
+
+    detail = "；".join(errors[:3]) if errors else ""
+    raise RuntimeError(
+        "按进程特征发现了候选端口，但未能完成接管。"
+        + (" 失败详情: {}".format(detail) if detail else "")
+    )
+
+
+def find_candidate_ports_from_process():
+    """按进程特征返回候选监听端口（不做 BiDi 探测）。"""
+    return find_candidate_ports_by_process()
 
 
 __all__ = [
@@ -261,6 +460,8 @@ __all__ = [
     "attach_exist_browser",
     "auto_attach_exist_browser",
     "find_exist_browsers",
+    "find_exist_browsers_by_process",
+    "auto_attach_exist_browser_by_process",
     # 版本
     "__version__",
 ]

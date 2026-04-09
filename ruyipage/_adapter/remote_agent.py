@@ -18,7 +18,27 @@ import subprocess
 import time
 import logging
 
-logger = logging.getLogger('ruyipage')
+logger = logging.getLogger("ruyipage")
+
+
+def _probe_ws_url(ws_url, timeout=3):
+    """尝试建立一次 WebSocket 握手，确认给定 BiDi URL 可用。"""
+    import websocket
+
+    ws = None
+    try:
+        ws = websocket.create_connection(
+            ws_url, timeout=timeout, suppress_origin=True, enable_multithread=True
+        )
+        return True
+    except Exception:
+        return False
+    finally:
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
 
 def find_free_port(start=9222, end=9322):
@@ -27,11 +47,11 @@ def find_free_port(start=9222, end=9322):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                s.bind(('127.0.0.1', port))
+                s.bind(("127.0.0.1", port))
                 return port
             except OSError:
                 continue
-    raise RuntimeError('找不到空闲端口 [{}, {})'.format(start, end))
+    raise RuntimeError("找不到空闲端口 [{}, {})".format(start, end))
 
 
 def is_port_open(host, port, timeout=1.0):
@@ -62,8 +82,16 @@ def get_bidi_ws_url(host, port, timeout=30):
     import urllib.request
     import urllib.error
 
+    direct_ws = "ws://{}:{}".format(host, port)
+    session_ws = "ws://{}:{}/session".format(host, port)
+
+    # 先优先探测直连根路径。AdsPower / FlowerBrowser 暴露的 Firefox BiDi
+    # 常见为 ws://host:port，而不是标准 Firefox Remote Agent 的 /session。
+    if _probe_ws_url(direct_ws, timeout=3):
+        return direct_ws
+
     deadline = time.time() + timeout
-    url = 'http://{}:{}/json'.format(host, port)
+    url = "http://{}:{}/json".format(host, port)
 
     while time.time() < deadline:
         try:
@@ -71,21 +99,23 @@ def get_bidi_ws_url(host, port, timeout=30):
                 data = json.loads(resp.read().decode())
                 # Firefox 返回顶层对象，含 webSocketDebuggerUrl
                 if isinstance(data, dict):
-                    ws = data.get('webSocketDebuggerUrl', '')
+                    ws = data.get("webSocketDebuggerUrl", "")
                     if ws:
                         return ws
                 # 某些版本返回列表（CDP 兼容格式）
                 if isinstance(data, list) and data:
-                    ws = data[0].get('webSocketDebuggerUrl', '')
+                    ws = data[0].get("webSocketDebuggerUrl", "")
                     if ws:
                         return ws
         except (urllib.error.URLError, OSError, json.JSONDecodeError):
             pass
         time.sleep(0.5)
 
-    # 降级：直接构造标准 BiDi URL
-    logger.warning('无法从 /json 获取 WS URL，使用默认路径')
-    return 'ws://{}:{}/session'.format(host, port)
+    # 降级：优先返回仍可握手的地址。
+    if _probe_ws_url(session_ws, timeout=3):
+        return session_ws
+
+    return direct_ws
 
 
 def wait_for_firefox(host, port, timeout=30):
@@ -118,16 +148,17 @@ def launch_firefox(cmd, env=None):
         subprocess.Popen 实例
     """
     import os
+
     kwargs = {
-        'stdout': subprocess.DEVNULL,
-        'stderr': subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
     }
     if env:
-        kwargs['env'] = env
+        kwargs["env"] = env
 
     # Windows 下隐藏控制台窗口
-    if hasattr(subprocess, 'CREATE_NO_WINDOW'):
-        kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-    logger.debug('启动 Firefox: %s', ' '.join(cmd))
+    logger.debug("启动 Firefox: %s", " ".join(cmd))
     return subprocess.Popen(cmd, **kwargs)
