@@ -12,7 +12,7 @@ import json
 import threading
 import logging
 
-logger = logging.getLogger('ruyipage')
+logger = logging.getLogger("ruyipage")
 
 
 class BiDiTransport:
@@ -51,24 +51,28 @@ class BiDiTransport:
             return
         try:
             import websocket
+
             self._ws = websocket.create_connection(
                 self._url,
                 timeout=timeout,
                 suppress_origin=True,
                 enable_multithread=True,
             )
+            # 连接成功后改为阻塞读取，避免空闲期 socket timeout 被当作断线。
+            self._ws.settimeout(None)
         except Exception as e:
-            raise ConnectionError('BiDi WebSocket 连接失败 {}: {}'.format(
-                self._url, e)) from e
+            raise ConnectionError(
+                "BiDi WebSocket 连接失败 {}: {}".format(self._url, e)
+            ) from e
 
         self._running = True
         self._recv_thread = threading.Thread(
             target=self._recv_loop,
-            name='bidi-transport-recv',
+            name="bidi-transport-recv",
             daemon=True,
         )
         self._recv_thread.start()
-        logger.debug('BiDiTransport 已连接: %s', self._url)
+        logger.debug("BiDiTransport 已连接: %s", self._url)
 
     def disconnect(self):
         """关闭连接"""
@@ -79,7 +83,7 @@ class BiDiTransport:
             except Exception:
                 pass
             self._ws = None
-        logger.debug('BiDiTransport 已断开')
+        logger.debug("BiDiTransport 已断开")
 
     @property
     def is_connected(self) -> bool:
@@ -98,15 +102,16 @@ class BiDiTransport:
             RuntimeError: 发送失败
         """
         if not self.is_connected:
-            raise ConnectionError('BiDiTransport 未连接，无法发送消息')
+            raise ConnectionError("BiDiTransport 未连接，无法发送消息")
         raw = json.dumps(msg, ensure_ascii=False)
         try:
             with self._send_lock:
                 self._ws.send(raw)
-            logger.debug('Transport 发送 -> id=%s method=%s',
-                         msg.get('id'), msg.get('method'))
+            logger.debug(
+                "Transport 发送 -> id=%s method=%s", msg.get("id"), msg.get("method")
+            )
         except Exception as e:
-            raise RuntimeError('BiDi 消息发送失败: {}'.format(e)) from e
+            raise RuntimeError("BiDi 消息发送失败: {}".format(e)) from e
 
     # ── 接收循环 ──────────────────────────────────────────────────────────
 
@@ -117,19 +122,19 @@ class BiDiTransport:
                 raw = self._ws.recv()
                 if not raw:
                     continue
-                logger.debug('Transport 收到 %d 字节', len(raw))
+                logger.debug("Transport 收到 %d 字节", len(raw))
                 try:
                     self._on_message(raw)
                 except Exception as e:
-                    logger.error('on_message 回调异常: %s', e)
+                    logger.error("on_message 回调异常: %s", e)
             except Exception as e:
                 if self._running:
-                    logger.warning('BiDiTransport 接收错误（连接断开）: %s', e)
+                    logger.warning("BiDiTransport 接收错误（连接断开）: %s", e)
                     self._running = False
                     if self._on_disconnect:
                         try:
                             self._on_disconnect()
                         except Exception as de:
-                            logger.error('on_disconnect 回调异常: %s', de)
+                            logger.error("on_disconnect 回调异常: %s", de)
                 break
-        logger.debug('BiDiTransport 接收线程退出')
+        logger.debug("BiDiTransport 接收线程退出")

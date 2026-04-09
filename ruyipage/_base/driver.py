@@ -97,6 +97,9 @@ class BrowserBiDiDriver(object):
         self._ws = websocket.create_connection(
             ws_url, timeout=30, suppress_origin=True, enable_multithread=True
         )
+        # 连接建立后切回阻塞模式，避免页面空闲时 recv() 因 socket timeout
+        # 被误判为 WebSocket 已断开。
+        self._ws.settimeout(None)
 
         self._is_running = True
 
