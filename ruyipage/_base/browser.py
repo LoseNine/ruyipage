@@ -739,6 +739,8 @@ class Firefox(object):
             force: 是否强制结束进程
         """
         with self._quit_lock:
+            if self._driver:
+                self._driver.mark_closing()
             try:
                 self._driver.run("browser.close", timeout=3)
             except Exception:
@@ -791,6 +793,7 @@ class Firefox(object):
     def _cleanup_on_exit(self):
         if not self._driver:
             return
+        self._driver.mark_closing()
         try:
             self._teardown_proxy_auth()
         except Exception:

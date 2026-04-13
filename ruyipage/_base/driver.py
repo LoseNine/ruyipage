@@ -62,6 +62,7 @@ class BrowserBiDiDriver(object):
         self._recv_th = None
         self._event_th = None
         self._is_running = False
+        self._closing = False
 
         # 状态
         self.session_id = None
@@ -101,6 +102,7 @@ class BrowserBiDiDriver(object):
         # 被误判为 WebSocket 已断开。
         self._ws.settimeout(None)
 
+        self._closing = False
         self._is_running = True
 
         # 启动接收线程
@@ -125,11 +127,16 @@ class BrowserBiDiDriver(object):
 
         self._initialized = False
 
+    def mark_closing(self):
+        """标记当前连接即将被主动关闭，避免记录预期断链日志。"""
+        self._closing = True
+
     def _stop(self):
         """内部停止方法：关闭连接和线程，但不清理单例注册
 
         用于 reconnect() 等需要重建连接但保留单例引用的场景。
         """
+        self._closing = True
         self._is_running = False
 
         if self._ws:
@@ -335,16 +342,16 @@ class BrowserBiDiDriver(object):
                         logger.debug("忽略未知消息类型: %s", msg_type)
 
             except Exception as e:
-                if self._is_running:
+                if self._is_running and not self._closing:
                     logger.warning("WebSocket 接收错误: %s", e)
-                    self._is_running = False
-                    # 唤醒所有等待中的命令
-                    with self._results_lock:
-                        for q in self._method_results.values():
-                            try:
-                                q.put_nowait(None)
-                            except Exception:
-                                pass
+                self._is_running = False
+                # 唤醒所有等待中的命令
+                with self._results_lock:
+                    for q in self._method_results.values():
+                        try:
+                            q.put_nowait(None)
+                        except Exception:
+                            pass
                 break
 
     def _handle_immediate_event(self, handler, event_params):
