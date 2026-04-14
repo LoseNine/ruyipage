@@ -307,6 +307,61 @@ This showcase page covers:
 - open shadow roots
 - complex text nodes and SVG nodes
 
+### Mouse Visual Debugging
+
+`ruyiPage` now supports an `action_visual=True` mouse visual debugging mode, which is useful when you need to inspect where the cursor actually moved and what target was really clicked during automation.
+
+When enabled, it shows:
+
+- BiDi mouse movement trails
+- Click position highlight / flash feedback
+- Current mouse coordinates
+- Highlight of the current click target element
+- Mouse-side feedback for built-in JS click / JS input paths
+
+This debug mode is intentionally focused on **mouse behavior**, mainly covering:
+
+- `page.actions.move_to()` / `move()` / `human_move()`
+- `page.actions.click()` / `double_click()` / `human_click()`
+- `page.actions.drag_to()` / `hold()` / `release()`
+- `ele.click.left()` / `click_self()` / `double_click()`
+- `ele.click.by_js()`
+- Mouse positioning feedback for `ele.input(..., by_js=True)`
+
+The simplest way to launch it:
+
+```python
+from ruyipage import launch
+
+page = launch(action_visual=True, headless=False)
+```
+
+If you prefer enabling it through `options`, you can do it like this:
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+opts = FirefoxOptions()
+opts.enable_action_visual(True)
+opts.headless(False)
+
+page = FirefoxPage(opts)
+page.get('https://www.example.com')
+```
+
+To view the full local demo directly, run:
+
+```bash
+python examples/42_2_action_visual_showcase.py
+```
+
+That example uses a dedicated local mouse-only demo page and showcases:
+
+- BiDi mouse trails
+- Click position and target highlighting
+- Drag trails
+- Visual feedback for JS click
+
 ### Attach to an Already-Open Browser
 
 If Firefox is already open manually, or a fingerprint browser is started first, `ruyiPage` can attach to the existing instance directly.

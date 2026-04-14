@@ -307,6 +307,61 @@ python examples/42_xpath_picker_complex_showcase.py
 - open shadow root
 - 复杂文本节点与 SVG 节点
 
+### 鼠标行为可视化调试
+
+`ruyiPage` 现在支持 `action_visual=True` 的鼠标行为可视化调试模式，适合排查自动化流程里“鼠标到底移动到了哪里、实际点到了哪里”这类问题。
+
+开启后会显示：
+
+- BiDi 鼠标移动轨迹可视化
+- BiDi 点击位置高亮 / 闪烁提示
+- 当前鼠标坐标
+- 当前点击目标元素高亮
+- 框架内置 JS click / JS input 的鼠标反馈
+
+当前这套调试模式聚焦在**鼠标行为**，主要覆盖：
+
+- `page.actions.move_to()` / `move()` / `human_move()`
+- `page.actions.click()` / `double_click()` / `human_click()`
+- `page.actions.drag_to()` / `hold()` / `release()`
+- `ele.click.left()` / `click_self()` / `double_click()`
+- `ele.click.by_js()`
+- `ele.input(..., by_js=True)` 的鼠标定位反馈
+
+最简单启动方式：
+
+```python
+from ruyipage import launch
+
+page = launch(action_visual=True, headless=False)
+```
+
+如果你是通过 `options` 配置，也可以这样开启：
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+opts = FirefoxOptions()
+opts.enable_action_visual(True)
+opts.headless(False)
+
+page = FirefoxPage(opts)
+page.get('https://www.example.com')
+```
+
+如果你想直接看本地完整演示，可以运行：
+
+```bash
+python examples/42_2_action_visual_showcase.py
+```
+
+该示例会使用专门的本地鼠标演示页，集中展示：
+
+- BiDi 鼠标轨迹
+- 点击位置与目标高亮
+- 拖拽轨迹
+- JS click 的可视化反馈
+
 ### 接管已打开的浏览器
 
 如果 Firefox 已经是你手动打开的，或者是指纹浏览器先打开的，也可以直接接管现有实例。
