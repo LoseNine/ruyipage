@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .driver import BrowserBiDiDriver, ContextDriver
 from .._adapter.remote_agent import get_bidi_ws_url
+from .._functions.sleep import sleep as _sleep
 from .._configs.firefox_options import FirefoxOptions
 from .._bidi import network as bidi_network
 from .._bidi import session as bidi_session

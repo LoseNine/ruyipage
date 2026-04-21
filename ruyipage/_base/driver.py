@@ -4,6 +4,11 @@
 实现同步阻塞式 API 的关键：
 - BrowserBiDiDriver: 管理单一 WebSocket 连接，后台线程接收消息
 - ContextDriver: 轻量包装器，为每个 tab/frame 注入 context 参数
+
+异步支持（可选）：
+  安装 ruyiPage[async] 后，run() 方法在 greenlet 异步上下文中
+  自动切换到异步路径（await_ → asyncio.Future），不阻塞事件循环。
+  同步路径完全不受影响。
 """
 
 import json
@@ -15,6 +20,20 @@ from queue import Queue, Empty
 from ..errors import BiDiError, PageDisconnectedError
 
 logger = logging.getLogger("ruyipage")
+
+# 异步支持检测（greenlet 未安装时为 False，同步路径零开销）
+_HAS_ASYNC = False
+_in_async_greenlet = None
+_await_ = None
+
+try:
+    from .._async.greenlet_bridge import _in_async_greenlet as _iag, await_ as _aw
+
+    _HAS_ASYNC = True
+    _in_async_greenlet = _iag
+    _await_ = _aw
+except ImportError:
+    pass
 
 
 class BrowserBiDiDriver(object):
@@ -67,6 +86,9 @@ class BrowserBiDiDriver(object):
         # 状态
         self.session_id = None
         self.alert_flag = False
+
+        # 异步支持（可选，由 switch_to_async() 设置）
+        self._mode = "sync"  # "sync" | "async"
 
     @property
     def is_running(self):
@@ -138,6 +160,7 @@ class BrowserBiDiDriver(object):
         """
         self._closing = True
         self._is_running = False
+        self._mode = "sync"
 
         if self._ws:
             try:
@@ -182,8 +205,30 @@ class BrowserBiDiDriver(object):
 
         self.start(ws_url)
 
+    async def switch_to_async(self):
+        """将驱动标记为异步模式
+
+        不关闭现有的同步 WebSocket 连接——session 和事件订阅都绑定在上面。
+        异步模式下，driver.run() 在 greenlet 内检测到异步上下文后，
+        会通过 await_() 挂起 greenlet 而非阻塞线程。
+
+        核心机制：
+        - 同步 recv_loop 线程继续运行，接收消息并将命令响应放入 Queue
+        - driver.run() 在 greenlet 内通过 await_(queue_get_async()) 等待响应
+        - queue_get_async 在 executor 中运行，不阻塞事件循环
+        - 事件回调由同步 event_loop 线程照常分发
+        """
+        if self._mode == "async":
+            return
+        self._mode = "async"
+        logger.debug("BrowserBiDiDriver 已切换到异步模式: %s", self.address)
+
     def run(self, method, params=None, timeout=None):
-        """同步发送 BiDi 命令并等待响应
+        """发送 BiDi 命令并等待响应
+
+        同步上下文：阻塞等待（Queue.get），使用 websocket-client。
+        异步上下文（greenlet 内）：通过 await_ 走 asyncio.Future，
+        使用 websockets 库，不阻塞事件循环。
 
         Args:
             method: BiDi 方法名，如 'browsingContext.navigate'
@@ -204,6 +249,16 @@ class BrowserBiDiDriver(object):
             from .._functions.settings import Settings
 
             timeout = Settings.bidi_timeout
+
+        # ── 异步路径（greenlet 内，走 asyncio）──
+        if (
+            _HAS_ASYNC
+            and self._mode == "async"
+            and _in_async_greenlet()
+        ):
+            return self._run_in_greenlet(method, params, timeout)
+
+        # ── 同步路径（原有逻辑，一字不改）──
 
         # 生成唯一 ID
         with self._id_lock:
@@ -269,9 +324,89 @@ class BrowserBiDiDriver(object):
             else:
                 handlers[key] = callback
 
+        # 异步模式下同步路由到异步桥
+
     def remove_callback(self, event, context=None, immediate=False):
         """移除事件回调"""
         self.set_callback(event, None, context, immediate)
+
+    def _run_in_greenlet(self, method, params, timeout):
+        """在 greenlet 异步上下文中发送命令并等待响应
+
+        复用现有的同步 WebSocket 连接和 recv_loop 线程。
+        命令通过同步 ws.send() 发出（在 executor 中执行以避免阻塞事件循环），
+        响应由 recv_loop 放入 Queue，通过 await_(queue_get_async) 异步等待。
+
+        这样不需要新建 WebSocket 连接，session 和事件订阅都保持有效。
+        """
+        import asyncio
+
+        # 生成唯一 ID（锁在 executor 中持有，不阻塞事件循环 — 极短操作）
+        with self._id_lock:
+            self._cur_id += 1
+            cmd_id = self._cur_id
+
+        # 创建响应队列
+        response_queue = Queue()
+        with self._results_lock:
+            self._method_results[cmd_id] = response_queue
+
+        # 构建并发送消息 — 通过 executor 执行同步 ws.send()
+        msg = {"id": cmd_id, "method": method, "params": params or {}}
+        try:
+            raw = json.dumps(msg)
+
+            async def _send():
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_send, raw)
+
+            _await_(_send())
+            logger.debug("发送(异步) -> %d %s", cmd_id, method)
+        except Exception as e:
+            with self._results_lock:
+                self._method_results.pop(cmd_id, None)
+            raise PageDisconnectedError("发送消息失败: {}".format(e))
+
+        # 异步等待响应 — 通过 executor 运行 Queue.get() 避免阻塞事件循环
+        async def _wait():
+            loop = asyncio.get_running_loop()
+            try:
+                return await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, lambda: response_queue.get(timeout=timeout)
+                    ),
+                    timeout=timeout + 1,  # 外层 timeout 比内层宽松，优先让 Queue.get 超时
+                )
+            except asyncio.TimeoutError:
+                raise Empty()
+
+        try:
+            result = _await_(_wait())
+        except Empty:
+            with self._results_lock:
+                self._method_results.pop(cmd_id, None)
+            raise BiDiError("timeout", "命令超时: {} ({}s)".format(method, timeout))
+
+        if result is None:
+            raise PageDisconnectedError("连接已断开")
+
+        with self._results_lock:
+            self._method_results.pop(cmd_id, None)
+
+        # 处理错误响应
+        if result.get("type") == "error":
+            raise BiDiError(
+                result.get("error", "unknown error"),
+                result.get("message", ""),
+                result.get("stacktrace", ""),
+            )
+
+        return result.get("result", {})
+
+    def _sync_send(self, raw):
+        """线程安全的同步发送（供 executor 调用）"""
+        with self._ws_send_lock:
+            self._ws.send(raw)
 
     def _recv_loop(self):
         """后台线程：接收所有 WebSocket 消息并分发

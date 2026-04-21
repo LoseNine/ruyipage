@@ -3,6 +3,8 @@
 
 import time
 
+from .._functions.sleep import sleep as _sleep
+
 
 class PageScroller(object):
     """页面级滚动管理器
@@ -48,7 +50,7 @@ class PageScroller(object):
             if check():
                 return True
             self._perform_scroll(step_x, step_y)
-            time.sleep(pause)
+            _sleep(pause)
         return check()
 
     def to_top(self):
@@ -147,7 +149,7 @@ class PageScroller(object):
                 delta = ele_mid_y - viewport_mid_y
                 if delta:
                     self._perform_scroll(0, delta)
-                    time.sleep(0.1)
+                    _sleep(0.1)
         return self._owner
 
     def to_location(self, x, y):
@@ -195,7 +197,7 @@ class ElementScroller(object):
             if check():
                 return True
             self._perform_scroll(step_x, step_y)
-            time.sleep(pause)
+            _sleep(pause)
         return check()
 
     def to_top(self):

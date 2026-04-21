@@ -135,9 +135,10 @@ class Clicker(object):
         self.left()
 
         import time
+        from .._functions.sleep import sleep as _sleep
 
         for _ in range(20):
-            time.sleep(0.3)
+            _sleep(0.3)
             new_tabs = set(browser.tab_ids) - old_tabs
             if new_tabs:
                 return browser.get_tab(list(new_tabs)[0])

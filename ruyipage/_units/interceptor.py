@@ -51,6 +51,8 @@ from queue import Queue, Empty
 from typing import Dict, Optional, List, Union
 
 from .._bidi import network as bidi_network
+from .._functions.sleep import sleep as _sleep
+from .._functions.queue_utils import queue_get as _queue_get
 from .._bidi import session as bidi_session
 
 import logging
@@ -529,7 +531,7 @@ class InterceptedRequest(object):
                     return None
             except Exception:
                 pass
-            time.sleep(0.3)
+            _sleep(0.3)
 
         # 某些用法会在 continue_request()/continue_response() 后立即 stop()，
         # 这时响应完成事件可能还没来得及落到 DataCollector。若 Interceptor
@@ -1336,7 +1338,7 @@ class Interceptor(object):
             page.intercept.stop()
         """
         try:
-            return self._queue.get(timeout=timeout)
+            return _queue_get(self._queue, timeout=timeout)
         except Empty:
             return None
 

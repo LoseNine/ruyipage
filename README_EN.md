@@ -286,7 +286,7 @@ Notes:
 - `private=True` / `opts.private_mode(True)` adds the `-private` startup argument for Firefox
 - This is different from the default temporary `profile`
 - If you only want a one-off session without reusing old data, you can also simply omit `user_dir`
-- Full example: `quickstart_private_mode.py`
+- Full example: see the `examples/` directory
 
 ### Enable XPath Picker
 

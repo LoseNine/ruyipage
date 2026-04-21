@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from .._base.base import BaseElement
 from .._functions.bidi_values import parse_value, make_shared_ref
 from .._functions.keys import Keys
+from .._functions.sleep import sleep as _sleep
 from .._bidi import script as bidi_script
 from ..errors import (
     ElementLostError,
@@ -456,7 +457,7 @@ class FirefoxElement(BaseElement):
         else:
             # 优先使用原生 BiDi 滚轮将元素带入视口，避免生成非原生点击事件
             self._owner.scroll.to_see(self, center=True)
-            time.sleep(0.1)
+            _sleep(0.1)
             pos = self._run_safe("""(el) => {
                 const r = el.getBoundingClientRect();
                 return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
@@ -654,7 +655,7 @@ class FirefoxElement(BaseElement):
         self._run_safe(
             '(el) => el.scrollIntoView({block: "center", inline: "nearest"})'
         )
-        time.sleep(0.1)
+        _sleep(0.1)
         pos = self._get_center()
         if pos:
             self._owner._driver._browser_driver.run(
@@ -1158,7 +1159,7 @@ class FirefoxElement(BaseElement):
                 return elements
             if time.time() >= end_time:
                 break
-            time.sleep(0.3)
+            _sleep(0.3)
 
         return []
 

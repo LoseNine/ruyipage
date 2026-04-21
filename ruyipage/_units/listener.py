@@ -30,6 +30,7 @@ import threading
 from queue import Queue, Empty
 
 from .._bidi import session as bidi_session
+from .._functions.queue_utils import queue_get as _queue_get
 
 logger = logging.getLogger('ruyipage')
 
@@ -366,7 +367,7 @@ class Listener(object):
                 break
 
             try:
-                packet = self._caught.get(timeout=min(remaining, 0.5))
+                packet = _queue_get(self._caught, timeout=min(remaining, 0.5))
                 results.append(packet)
             except Empty:
                 continue

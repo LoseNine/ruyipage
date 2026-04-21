@@ -4,6 +4,7 @@
 import time
 
 from .._functions.settings import Settings
+from .._functions.sleep import sleep as _sleep
 from ..errors import WaitTimeoutError
 
 
@@ -23,7 +24,7 @@ class PageWaiter(object):
 
     def __call__(self, seconds):
         """等待指定秒数"""
-        time.sleep(seconds)
+        _sleep(seconds)
         return self._owner
 
     def ele_displayed(self, locator, timeout=None):
@@ -188,7 +189,7 @@ class PageWaiter(object):
                     raise WaitTimeoutError(msg)
                 return False
 
-            time.sleep(0.3)
+            _sleep(0.3)
 
 
 class ElementWaiter(object):
@@ -205,7 +206,7 @@ class ElementWaiter(object):
 
     def __call__(self, seconds):
         """等待指定秒数"""
-        time.sleep(seconds)
+        _sleep(seconds)
         return self._ele
 
     def displayed(self, timeout=None):
@@ -221,7 +222,7 @@ class ElementWaiter(object):
                 if Settings.raise_when_wait_failed:
                     raise WaitTimeoutError('等待元素可见超时')
                 return False
-            time.sleep(0.3)
+            _sleep(0.3)
 
     def hidden(self, timeout=None):
         """等待元素隐藏"""
@@ -236,7 +237,7 @@ class ElementWaiter(object):
                 if Settings.raise_when_wait_failed:
                     raise WaitTimeoutError('等待元素隐藏超时')
                 return False
-            time.sleep(0.3)
+            _sleep(0.3)
 
     def enabled(self, timeout=None):
         """等待元素可用"""
@@ -249,7 +250,7 @@ class ElementWaiter(object):
                 return self._ele
             if time.time() >= end_time:
                 return False
-            time.sleep(0.3)
+            _sleep(0.3)
 
     def disabled(self, timeout=None):
         """等待元素禁用"""
@@ -262,4 +263,4 @@ class ElementWaiter(object):
                 return True
             if time.time() >= end_time:
                 return False
-            time.sleep(0.3)
+            _sleep(0.3)

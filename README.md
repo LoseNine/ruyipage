@@ -288,7 +288,7 @@ page.quit()
 - `private=True` / `opts.private_mode(True)` 会为 Firefox 增加 `-private` 启动参数
 - 这和默认的临时 `profile` 不是一回事
 - 如果你只是想要一次性会话，不复用历史数据，不传 `user_dir` 也可以
-- 完整示例可参考根目录：`quickstart_private_mode.py`
+- 完整示例可参考 `examples/` 目录
 
 ### 启用 XPath Picker
 
@@ -1499,6 +1499,7 @@ page.extensions.uninstall(ext_id)
 - `36_native_bidi_select.py`
 - `39_attach_exist_browser.py` 自动探测可接管实例，再接管已打开的 Firefox/指纹浏览器
 - `42_xpath_picker_complex_showcase.py` 启动 XPath picker，并打开包含复杂节点、shadow root、嵌套 iframe 的综合展示页
+- `42_3_debug_px_context_probe.py` 直接打开 `debug_px.html`，打印 PX challenge iframe 的 browsing context 树，并尝试 attach 到 child context 做最小 DOM / canvas 诊断
 - `46_human_behavior_showcase.py` 演示 bezier / windmouse 两套拟人轨迹算法，并开启鼠标行为可视化
 
 ---

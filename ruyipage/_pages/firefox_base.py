@@ -17,6 +17,8 @@ from .._bidi import script as bidi_script
 from .._functions.bidi_values import parse_value, make_shared_ref
 from .._functions.locator import parse_locator
 from .._functions.settings import Settings
+from .._functions.sleep import sleep as _sleep
+from .._bidi.input_ import build_human_click_actions
 from ..errors import ElementNotFoundError, JavaScriptError, WaitTimeoutError, BiDiError
 
 logger = logging.getLogger("ruyipage")
@@ -3732,7 +3734,7 @@ class FirefoxBase(BasePage):
                 self._reinject_xpath_picker_if_needed()
                 self._reinject_action_visual_if_needed()
                 return self
-            time.sleep(0.1)
+            _sleep(0.1)
 
         raise WaitTimeoutError("等待页面加载超时 ({}s)".format(timeout))
 
@@ -3867,7 +3869,7 @@ class FirefoxBase(BasePage):
             if time.time() >= end_time:
                 break
 
-            time.sleep(0.3)
+            _sleep(0.3)
 
         if raise_err:
             raise ElementNotFoundError("未找到元素: {}".format(locator))
@@ -3891,7 +3893,7 @@ class FirefoxBase(BasePage):
             if time.time() >= end_time:
                 break
 
-            time.sleep(0.3)
+            _sleep(0.3)
 
         return []
 
@@ -4550,7 +4552,7 @@ class FirefoxBase(BasePage):
                 # 先等待 userPromptOpened 事件真正到达，避免“页面已调用 confirm，
                 # 但浏览器侧 prompt 状态尚未建立”时过早处理。
                 if not getattr(drv, "alert_flag", False):
-                    time.sleep(0.05)
+                    _sleep(0.05)
                     continue
 
                 bidi_context.handle_user_prompt(
@@ -4562,7 +4564,7 @@ class FirefoxBase(BasePage):
                 return self
             except BiDiError as e:
                 if "no such alert" in str(e.error).lower():
-                    time.sleep(0.05)
+                    _sleep(0.05)
                     continue
                 raise
 
@@ -4753,7 +4755,7 @@ class FirefoxBase(BasePage):
             prompt = self.get_user_prompt()
             if prompt:
                 return prompt
-            time.sleep(0.05)
+            _sleep(0.05)
         return None
 
     def handle_prompt(self, accept=True, text=None, timeout=3):
@@ -4905,7 +4907,7 @@ class FirefoxBase(BasePage):
         try:
             self.trigger_prompt_target(trigger_locator, trigger=trigger)
             done.wait(timeout)
-            time.sleep(0.2)
+            _sleep(0.2)
         finally:
             try:
                 if sub_id:
@@ -5281,7 +5283,7 @@ class FirefoxBase(BasePage):
 
                 if not cf_ctx:
                     logger.debug("未找到 CF iframe，继续等待...")
-                    time.sleep(check_interval)
+                    _sleep(check_interval)
                     continue
 
                 cf_ctx_id = cf_ctx["context"]
@@ -5313,7 +5315,7 @@ class FirefoxBase(BasePage):
 
                 if size.get("w", 0) == 0 or size.get("h", 0) == 0:
                     logger.warning("无法获取 iframe 尺寸")
-                    time.sleep(check_interval)
+                    _sleep(check_interval)
                     continue
 
                 logger.info(f"iframe 尺寸: {size['w']}×{size['h']}")
@@ -5363,40 +5365,22 @@ class FirefoxBase(BasePage):
                     click_y = size["h"] // 2
                     logger.info(f"在 iframe 内部点击左侧: ({click_x}, {click_y})")
 
+                # 使用拟人轨迹点击（Bezier/弧线/超出回拉 + 悬停抖动 + 点击后漂移）
+                # 起始坐标限制在 iframe 范围内，避免坐标越界
+                import random as _rand
+                start_x = _rand.randint(max(1, click_x + 40), max(click_x + 60, size["w"] - 10))
+                start_y = _rand.randint(max(1, click_y - 15), max(click_y + 15, size["h"] - 5))
+                human_actions = build_human_click_actions(click_x, click_y, sx=start_x, sy=start_y)
                 self._driver._browser_driver.run(
                     "input.performActions",
                     {
                         "context": cf_ctx_id,
-                        "actions": [
-                            {
-                                "type": "pointer",
-                                "id": "mouse_cf",
-                                "parameters": {"pointerType": "mouse"},
-                                "actions": [
-                                    {
-                                        "type": "pointerMove",
-                                        "x": click_x,
-                                        "y": click_y,
-                                        "duration": 0,
-                                    },
-                                    {
-                                        "type": "pause",
-                                        "duration": random.randint(50, 150),
-                                    },
-                                    {"type": "pointerDown", "button": 0},
-                                    {
-                                        "type": "pause",
-                                        "duration": random.randint(80, 160),
-                                    },
-                                    {"type": "pointerUp", "button": 0},
-                                ],
-                            }
-                        ],
+                        "actions": human_actions,
                     },
                 )
 
                 # 等待验证结果
-                time.sleep(3)
+                _sleep(3)
 
                 # 检查是否通过
                 body_text = self.run_js("document.body.innerText") or ""
@@ -5406,7 +5390,7 @@ class FirefoxBase(BasePage):
 
             except Exception as e:
                 logger.warning(f"CF 验证失败: {e}")
-                time.sleep(check_interval)
+                _sleep(check_interval)
                 continue
 
         logger.error(f"CF 验证超时（{timeout}秒）")

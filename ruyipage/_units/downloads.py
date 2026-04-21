@@ -14,6 +14,8 @@ from queue import Queue, Empty
 
 from .._bidi import browser_module as bidi_browser
 from .._bidi import session as bidi_session
+from .._functions.sleep import sleep as _sleep
+from .._functions.queue_utils import queue_get as _queue_get
 
 
 class DownloadEvent(object):
@@ -288,7 +290,7 @@ class DownloadsManager(object):
         while time.time() < end_time:
             remaining = end_time - time.time()
             try:
-                event = self._queue.get(timeout=min(remaining, 0.2))
+                event = _queue_get(self._queue, timeout=min(remaining, 0.2))
             except Empty:
                 continue
 
@@ -371,7 +373,7 @@ class DownloadsManager(object):
         while time.time() < end_time:
             if self.file_exists(path, min_size=min_size):
                 return True
-            time.sleep(0.1)
+            _sleep(0.1)
         return False
 
     def _on_download_will_begin(self, params):

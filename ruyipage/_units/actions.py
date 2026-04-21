@@ -16,6 +16,7 @@ import math
 import time
 
 from .._functions.keys import Keys
+from .._functions.sleep import sleep as _sleep
 
 
 class Actions(object):
@@ -546,7 +547,7 @@ class Actions(object):
             if not ele_or_loc.states.is_whole_in_viewport:
                 try:
                     self._owner.scroll.to_see(ele_or_loc, center=True)
-                    time.sleep(random.uniform(0.1, 0.2))
+                    _sleep(random.uniform(0.1, 0.2))
                 except Exception:
                     pass
 

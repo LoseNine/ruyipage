@@ -34,6 +34,12 @@ dependencies = [
   "websocket-client>=1.0",
 ]
 
+[project.optional-dependencies]
+async = [
+  "greenlet>=3.2",
+  "websockets>=13.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/LoseNine/ruyipage"
 Repository = "https://github.com/LoseNine/ruyipage"

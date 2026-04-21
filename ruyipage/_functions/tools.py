@@ -5,6 +5,8 @@ import re
 import time
 import socket
 
+from .sleep import sleep as _sleep
+
 
 def wait_until(condition, timeout=10, interval=0.3):
     """等待条件满足
@@ -25,7 +27,7 @@ def wait_until(condition, timeout=10, interval=0.3):
                 return result
         except Exception:
             pass
-        time.sleep(interval)
+        _sleep(interval)
     return None
 
 
