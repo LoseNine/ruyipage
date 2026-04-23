@@ -2,19 +2,21 @@
 """BiDi browsingContext 模块命令"""
 
 
-def navigate(driver, context, url, wait="complete"):
+def navigate(driver, context, url, wait="complete", timeout=None):
     """导航到指定 URL
 
     Args:
         context: browsingContext ID
         url: 目标 URL
         wait: 等待策略 - 'none'/'interactive'/'complete'
+        timeout: 超时时间（秒），None 使用默认值
 
     Returns:
         {'navigation': str|None, 'url': str}
     """
     return driver.run(
-        "browsingContext.navigate", {"context": context, "url": url, "wait": wait}
+        "browsingContext.navigate", {"context": context, "url": url, "wait": wait},
+        timeout=timeout,
     )
 
 

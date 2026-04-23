@@ -198,6 +198,9 @@ def create_browser_from_probe_info(info):
         c.get("context", "") for c in (info.get("contexts") or []) if c.get("context")
     ]
     browser._context_ids_lock = threading.Lock()
+    browser._context_nav_locks = {}
+    browser._context_nav_locks_lock = threading.Lock()
+    browser._init_lock = threading.Lock()
     browser._auto_profile = None
     browser._quit_lock = threading.Lock()
     browser._proxy_auth_intercept_id = None
@@ -449,6 +452,8 @@ class Firefox(object):
 
     _BROWSERS = {}  # {address: Firefox}
     _lock = threading.Lock()
+    _launch_lock = threading.Lock()
+    _RESERVED_PORTS = set()
 
     @classmethod
     def _cache_key_for(cls, addr_or_opts=None):
@@ -471,54 +476,92 @@ class Firefox(object):
                 return cls._BROWSERS[cache_key]
             instance = super(Firefox, cls).__new__(cls)
             instance._initialized = False
+            instance._init_lock = threading.Lock()
             if cache_key is not None:
                 cls._BROWSERS[cache_key] = instance
             return instance
 
     def __init__(self, addr_or_opts=None):
-        if self._initialized:
+        with self._init_lock:
+            if self._initialized:
+                return
+
+            # 解析参数
+            if isinstance(addr_or_opts, FirefoxOptions):
+                self._options = addr_or_opts
+            elif isinstance(addr_or_opts, str):
+                self._options = FirefoxOptions()
+                self._options.set_address(addr_or_opts)
+            elif addr_or_opts is None:
+                self._options = FirefoxOptions()
+            else:
+                self._options = FirefoxOptions()
+                self._options.set_address(str(addr_or_opts))
+
+            self._address = self._options.address
+            self._driver = None  # type: BrowserBiDiDriver
+            self._process = None  # type: subprocess.Popen
+            self._session_id = None
+            self._owns_session = False
+            self._contexts = {}  # {context_id: FirefoxTab 弱引用信息}
+            self._context_ids = []  # 有序的 context ID 列表
+            self._context_ids_lock = threading.Lock()
+            self._context_nav_locks = {}
+            self._context_nav_locks_lock = threading.Lock()
+            self._reserved_port = None
+            self._auto_profile = None  # 自动创建的临时 profile
+            self._quit_lock = threading.Lock()
+            self._proxy_auth_intercept_id = None
+            self._proxy_auth_subscription_id = None
+            self._xpath_picker_last_reinject = {}
+            self._atexit_registered = False
+
+            try:
+                self._connect_or_launch()
+                self._register_exit_cleanup()
+                with self._lock:
+                    self._BROWSERS[self._address] = self
+                self._initialized = True
+            except Exception:
+                # 初始化失败时移除单例，避免后续复用半初始化对象
+                with self._lock:
+                    if self._BROWSERS.get(self._address) is self:
+                        self._BROWSERS.pop(self._address, None)
+                self._initialized = False
+                raise
+
+    def get_context_nav_lock(self, context_id):
+        """返回某个 browsing context 专属的导航锁。"""
+        with self._context_nav_locks_lock:
+            lock = self._context_nav_locks.get(context_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._context_nav_locks[context_id] = lock
+            return lock
+
+    def _reserve_port(self, port):
+        """在进程内保留一个即将用于启动的调试端口。"""
+        if port is None:
             return
+        self._RESERVED_PORTS.add(port)
+        self._reserved_port = port
 
-        # 解析参数
-        if isinstance(addr_or_opts, FirefoxOptions):
-            self._options = addr_or_opts
-        elif isinstance(addr_or_opts, str):
-            self._options = FirefoxOptions()
-            self._options.set_address(addr_or_opts)
-        elif addr_or_opts is None:
-            self._options = FirefoxOptions()
-        else:
-            self._options = FirefoxOptions()
-            self._options.set_address(str(addr_or_opts))
+    def _release_reserved_port(self, port=None):
+        """释放进程内保留的调试端口。"""
+        port = self._reserved_port if port is None else port
+        if port is None:
+            return
+        self._RESERVED_PORTS.discard(port)
+        if self._reserved_port == port:
+            self._reserved_port = None
 
+    def _set_launch_port(self, port):
+        """更新 options/address，并同步进程内端口保留。"""
+        if self._reserved_port is not None and self._reserved_port != port:
+            self._release_reserved_port(self._reserved_port)
+        self._options.set_port(port)
         self._address = self._options.address
-        self._driver = None  # type: BrowserBiDiDriver
-        self._process = None  # type: subprocess.Popen
-        self._session_id = None
-        self._owns_session = False
-        self._contexts = {}  # {context_id: FirefoxTab 弱引用信息}
-        self._context_ids = []  # 有序的 context ID 列表
-        self._context_ids_lock = threading.Lock()
-        self._auto_profile = None  # 自动创建的临时 profile
-        self._quit_lock = threading.Lock()
-        self._proxy_auth_intercept_id = None
-        self._proxy_auth_subscription_id = None
-        self._xpath_picker_last_reinject = {}
-        self._atexit_registered = False
-
-        try:
-            self._connect_or_launch()
-            self._register_exit_cleanup()
-            with self._lock:
-                self._BROWSERS[self._address] = self
-            self._initialized = True
-        except Exception:
-            # 初始化失败时移除单例，避免后续复用半初始化对象
-            with self._lock:
-                if self._BROWSERS.get(self._address) is self:
-                    self._BROWSERS.pop(self._address, None)
-            self._initialized = False
-            raise
+        self._reserve_port(port)
 
     @property
     def address(self):
@@ -878,9 +921,9 @@ class Firefox(object):
         """连接已有浏览器或启动新的"""
         # 尝试自动端口
         if self._options.auto_port:
-            port = self._find_free_port()
-            self._options.set_port(port)
-            self._address = self._options.address
+            with self._launch_lock:
+                port = self._find_free_port()
+                self._set_launch_port(port)
 
         if self._options.is_existing_only:
             # attach()/FirefoxPage('host:port') 这类显式接管场景才复用已有浏览器。
@@ -910,10 +953,11 @@ class Firefox(object):
 
         # launch()/FirefoxPage(opts) 场景应始终按当前 options 启动新实例，
         # 避免复用已存在的普通窗口，导致 private/user_dir/headless 等参数失效。
-        self._ensure_launch_port_available()
-
-        # 启动浏览器
-        self._launch_browser()
+        # 这里用类级启动锁把“端口探测 -> 真正启动进程”串成原子区间，
+        # 避免并发 launch 时多个实例同时抢占同一端口。
+        with self._launch_lock:
+            self._ensure_launch_port_available()
+            self._launch_browser()
 
         # 等待连接
         for i in range(self._options.retry_times + 1):
@@ -937,7 +981,9 @@ class Firefox(object):
                 pass
             self._process = None
 
-            self._launch_browser()
+            with self._launch_lock:
+                self._ensure_launch_port_available()
+                self._launch_browser()
             for i in range(self._options.retry_times + 1):
                 try:
                     if self._try_connect():
@@ -1010,8 +1056,7 @@ class Firefox(object):
 
         old_port = self._options.port
         new_port = self._find_free_port(start=old_port + 1)
-        self._options.set_port(new_port)
-        self._address = self._options.address
+        self._set_launch_port(new_port)
 
         message = "检测到端口 {} 已被占用，ruyiPage 已自动切换到可用端口 {}".format(
             old_port, new_port
@@ -1049,6 +1094,7 @@ class Firefox(object):
             self._setup_proxy_auth()
             self._setup_download_behavior()
             self._refresh_tabs()
+            self._release_reserved_port()
             logger.info("已连接到 Firefox: %s", self._address)
             return True
         except BrowserConnectError:
@@ -1060,6 +1106,7 @@ class Firefox(object):
                     with BrowserBiDiDriver._lock:
                         BrowserBiDiDriver._BROWSERS.pop(self._address, None)
                 self._driver = None
+            self._release_reserved_port()
             raise
         except Exception as e:
             logger.debug("连接失败: %s", e)
@@ -1074,6 +1121,7 @@ class Firefox(object):
                     with BrowserBiDiDriver._lock:
                         BrowserBiDiDriver._BROWSERS.pop(self._address, None)
                 self._driver = None
+            self._release_reserved_port()
             return False
 
     def _setup_proxy_auth(self):
@@ -1360,6 +1408,8 @@ class Firefox(object):
                 self._context_ids.remove(ctx_id)
                 self._contexts.pop(ctx_id, None)
                 self._xpath_picker_last_reinject.pop(ctx_id, None)
+                with self._context_nav_locks_lock:
+                    self._context_nav_locks.pop(ctx_id, None)
             logger.debug("标签页关闭: %s", ctx_id)
 
     def _on_navigation_event(self, params):
@@ -1415,6 +1465,8 @@ class Firefox(object):
 
         for port in range(start, start + 100):
             try:
+                if port in self._RESERVED_PORTS:
+                    continue
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.bind(("127.0.0.1", port))
                 sock.close()

@@ -5,12 +5,27 @@
 通过 Mixin 混入到生成的 Async 类中。
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from .greenlet_bridge import greenlet_spawn
 
 
 class AsyncFirefoxBaseMixin:
     """混入 AsyncFirefoxBase —— 手写的特殊方法"""
+
+    def _get_async_nav_lock(self):
+        """返回绑定到底层同步 page/frame 对象的导航锁。"""
+        lock = getattr(self._sync, "_async_nav_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._sync._async_nav_lock = lock
+        return lock
+
+    async def _run_serialized_navigation(self, method_name, *args, **kwargs):
+        """串行化同一页面对象上的异步导航类调用。"""
+        async with self._get_async_nav_lock():
+            await greenlet_spawn(getattr(self._sync, method_name), *args, **kwargs)
+        return self
 
     @asynccontextmanager
     async def with_frame(self, locator=None, index=None, context_id=None):

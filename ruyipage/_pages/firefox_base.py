@@ -3619,23 +3619,27 @@ class FirefoxBase(BasePage):
             wait_map = {"normal": "complete", "eager": "interactive", "none": "none"}
             wait = wait_map.get(self._load_mode, "complete")
 
-        if timeout:
-            old_timeout = Settings.bidi_timeout
-            Settings.bidi_timeout = timeout
+        # 将 timeout 作为局部值传递给 driver.run()，不再修改全局 Settings
+        nav_timeout = timeout if timeout else None
+        nav_lock = self._browser.get_context_nav_lock(self._context_id)
 
-        try:
-            bidi_context.navigate(
-                self._driver._browser_driver, self._context_id, url, wait=wait
-            )
-        except BiDiError as e:
-            # navigate 失败不一定是错误（如 none 模式下立即返回）
-            if self._is_expected_navigation_abort(e):
-                logger.debug("导航被页面主动中断（通常是自动刷新/跳转）: %s", e)
-            elif "timeout" not in str(e.error).lower():
-                logger.warning("导航错误: %s", e)
-        finally:
-            if timeout:
-                Settings.bidi_timeout = old_timeout
+        with nav_lock:
+            try:
+                bidi_context.navigate(
+                    self._driver._browser_driver, self._context_id, url, wait=wait,
+                    timeout=nav_timeout,
+                )
+            except BiDiError as e:
+                # navigate 失败不一定是错误（如 none 模式下立即返回）
+                if self._is_expected_navigation_abort(e):
+                    logger.debug("导航被页面主动中断（通常是自动刷新/跳转）: %s", e)
+                elif "timeout" in str(e.error).lower():
+                    logger.warning("导航超时: %s -> %s (%s)", url, e.bidi_message, e.error)
+                else:
+                    logger.warning("导航错误: %s", e)
+
+            if wait != "none":
+                self.wait_loading(timeout=nav_timeout)
 
         self._reinject_xpath_picker_if_needed()
         self._reinject_action_visual_if_needed()
@@ -3647,9 +3651,10 @@ class FirefoxBase(BasePage):
         Returns:
             self
         """
-        bidi_context.traverse_history(
-            self._driver._browser_driver, self._context_id, -1
-        )
+        with self._browser.get_context_nav_lock(self._context_id):
+            bidi_context.traverse_history(
+                self._driver._browser_driver, self._context_id, -1
+            )
         self._reinject_xpath_picker_if_needed()
         self._reinject_action_visual_if_needed()
         return self
@@ -3660,7 +3665,10 @@ class FirefoxBase(BasePage):
         Returns:
             self
         """
-        bidi_context.traverse_history(self._driver._browser_driver, self._context_id, 1)
+        with self._browser.get_context_nav_lock(self._context_id):
+            bidi_context.traverse_history(
+                self._driver._browser_driver, self._context_id, 1
+            )
         self._reinject_xpath_picker_if_needed()
         self._reinject_action_visual_if_needed()
         return self
@@ -3676,18 +3684,19 @@ class FirefoxBase(BasePage):
         """
         wait_map = {"normal": "complete", "eager": "interactive", "none": "none"}
         wait = wait_map.get(self._load_mode, "complete")
-        try:
-            bidi_context.reload(
-                self._driver._browser_driver,
-                self._context_id,
-                ignore_cache=ignore_cache,
-                wait=wait,
-            )
-        except BiDiError as e:
-            if self._is_expected_navigation_abort(e):
-                logger.debug("刷新被页面主动中断（通常是自动刷新/跳转）: %s", e)
-            else:
-                raise
+        with self._browser.get_context_nav_lock(self._context_id):
+            try:
+                bidi_context.reload(
+                    self._driver._browser_driver,
+                    self._context_id,
+                    ignore_cache=ignore_cache,
+                    wait=wait,
+                )
+            except BiDiError as e:
+                if self._is_expected_navigation_abort(e):
+                    logger.debug("刷新被页面主动中断（通常是自动刷新/跳转）: %s", e)
+                else:
+                    raise
         self._reinject_xpath_picker_if_needed()
         self._reinject_action_visual_if_needed()
         return self
@@ -4140,15 +4149,8 @@ class FirefoxBase(BasePage):
         Returns:
             JS 执行的返回值（自动转换为 Python 对象）
         """
-        if timeout:
-            old_timeout = Settings.bidi_timeout
-            Settings.bidi_timeout = timeout
-
-        try:
-            return self._run_js(script, *args, as_expr=as_expr, sandbox=sandbox)
-        finally:
-            if timeout:
-                Settings.bidi_timeout = old_timeout
+        return self._run_js(script, *args, as_expr=as_expr, sandbox=sandbox,
+                            timeout=timeout)
 
     def run_js_loaded(self, script, *args, as_expr=None, timeout=None):
         """等待页面加载完成后执行 JavaScript
@@ -4165,7 +4167,7 @@ class FirefoxBase(BasePage):
         self.wait.doc_loaded(timeout=timeout)
         return self.run_js(script, *args, as_expr=as_expr, timeout=timeout)
 
-    def _run_js(self, script, *args, as_expr=None, sandbox=None):
+    def _run_js(self, script, *args, as_expr=None, sandbox=None, timeout=None):
         """内部 JS 执行
 
         Detection rules (when ``as_expr is None``):
@@ -4191,7 +4193,8 @@ class FirefoxBase(BasePage):
         if use_expr:
             # ---------- expression mode ----------
             result = bidi_script.evaluate(
-                self._driver._browser_driver, self._context_id, script, sandbox=sandbox
+                self._driver._browser_driver, self._context_id, script, sandbox=sandbox,
+                timeout=timeout,
             )
         else:
             # ---------- function / callFunction mode ----------
@@ -4214,6 +4217,7 @@ class FirefoxBase(BasePage):
                 func_body,
                 sandbox=sandbox,
                 arguments=serialized_args,
+                timeout=timeout,
             )
 
         # 检查异常

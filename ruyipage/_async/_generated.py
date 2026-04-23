@@ -3,7 +3,7 @@
 # │ WARNING: 此文件由 scripts/generate_async_api.py 自动生成          │
 # │ 请勿手动编辑！修改后请重新运行生成器：                               │
 # │   python scripts/generate_async_api.py                          │
-# │ 生成时间: 2026-04-21 12:37:13                                        │
+# │ 生成时间: 2026-04-23 22:51:15                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
 from .greenlet_bridge import greenlet_spawn
@@ -254,8 +254,7 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         return await greenlet_spawn(self._sync.add_preload_script, script)
 
     async def back(self):
-        await greenlet_spawn(self._sync.back, )
-        return self
+        return await self._run_serialized_navigation('back', )
 
     async def clear_prompt_handler(self):
         return await greenlet_spawn(self._sync.clear_prompt_handler, )
@@ -284,12 +283,10 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         return await greenlet_spawn(self._sync.eval_handle, expression, await_promise=await_promise)
 
     async def forward(self):
-        await greenlet_spawn(self._sync.forward, )
-        return self
+        return await self._run_serialized_navigation('forward', )
 
     async def get(self, url, wait=None, timeout=None):
-        await greenlet_spawn(self._sync.get, url, wait=wait, timeout=timeout)
-        return self
+        return await self._run_serialized_navigation('get', url, wait=wait, timeout=timeout)
 
     async def get_cookies(self, all_info=False):
         return await greenlet_spawn(self._sync.get_cookies, all_info=all_info)
@@ -339,8 +336,7 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         return await greenlet_spawn(self._sync.prompt_login, trigger_locator, username, password, trigger=trigger, timeout=timeout)
 
     async def refresh(self, ignore_cache=False):
-        await greenlet_spawn(self._sync.refresh, ignore_cache=ignore_cache)
-        return self
+        return await self._run_serialized_navigation('refresh', ignore_cache=ignore_cache)
 
     async def remove_preload_script(self, script_id):
         return await greenlet_spawn(self._sync.remove_preload_script, script_id)

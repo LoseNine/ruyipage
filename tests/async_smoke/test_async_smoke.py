@@ -8,6 +8,8 @@
     pytest tests/async_smoke/test_async_smoke.py -v --asyncio-mode=auto
 """
 
+import asyncio
+
 import pytest
 
 
@@ -61,6 +63,17 @@ async def test_async_navigation_back_forward(async_page, fixture_page_url):
     await async_page.forward()
     await async_page.wait.doc_loaded()
     assert (await async_page.get_title()) == "Form Controls"
+
+
+async def test_async_concurrent_navigation_same_page(async_page, fixture_page_url):
+    """同一页面对象上的并发导航应串行执行，不应互相打断。"""
+    url1 = fixture_page_url("basic_form.html")
+    url2 = fixture_page_url("form_controls.html")
+
+    await asyncio.gather(async_page.get(url1), async_page.get(url2))
+
+    title = await async_page.get_title()
+    assert title in {"Basic Form", "Form Controls"}
 
 
 # ── 元素查找与交互（对标 test_click_input.py）──────────────────────────────

@@ -70,6 +70,8 @@ CHAINABLE_METHODS = {
     "activate",
 }
 
+SERIALIZED_CHAINABLE_METHODS = {"get", "back", "forward", "refresh"}
+
 # 返回 Element 的方法
 ELEMENT_RETURNING = {
     "ele": "single",
@@ -154,10 +156,17 @@ def generate_method(name, method, parent_class_name):
 
     if name in CHAINABLE_METHODS:
         lines.append("    async def {}({}):".format(name, params_str))
-        lines.append(
-            "        await greenlet_spawn(self._sync.{}, {})".format(name, call_args)
-        )
-        lines.append("        return self")
+        if name in SERIALIZED_CHAINABLE_METHODS:
+            lines.append(
+                "        return await self._run_serialized_navigation({}, {})".format(
+                    repr(name), call_args
+                )
+            )
+        else:
+            lines.append(
+                "        await greenlet_spawn(self._sync.{}, {})".format(name, call_args)
+            )
+            lines.append("        return self")
     elif name in ELEMENT_RETURNING:
         lines.append("    async def {}({}):".format(name, params_str))
         lines.append(

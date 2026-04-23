@@ -6,7 +6,7 @@ from .._functions.bidi_values import serialize_value
 
 def evaluate(driver, context, expression, await_promise=True,
              result_ownership='root', serialization_options=None,
-             user_activation=False, sandbox=None):
+             user_activation=False, sandbox=None, timeout=None):
     """执行 JavaScript 表达式
 
     Args:
@@ -17,6 +17,7 @@ def evaluate(driver, context, expression, await_promise=True,
         serialization_options: 序列化选项
         user_activation: 是否模拟用户激活
         sandbox: 沙箱名称
+        timeout: 超时时间（秒），None 使用默认值
 
     Returns:
         {'type': str, 'result': RemoteValue} 或 {'type': str, 'exceptionDetails': ...}
@@ -36,12 +37,13 @@ def evaluate(driver, context, expression, await_promise=True,
     if user_activation:
         params['userActivation'] = True
 
-    return driver.run('script.evaluate', params)
+    return driver.run('script.evaluate', params, timeout=timeout)
 
 
 def call_function(driver, context, function_declaration, arguments=None,
                   this=None, await_promise=True, result_ownership='root',
-                  serialization_options=None, user_activation=False, sandbox=None):
+                  serialization_options=None, user_activation=False, sandbox=None,
+                  timeout=None):
     """调用 JavaScript 函数
 
     Args:
@@ -89,7 +91,7 @@ def call_function(driver, context, function_declaration, arguments=None,
     if user_activation:
         params['userActivation'] = True
 
-    return driver.run('script.callFunction', params)
+    return driver.run('script.callFunction', params, timeout=timeout)
 
 
 def add_preload_script(driver, function_declaration, arguments=None,
