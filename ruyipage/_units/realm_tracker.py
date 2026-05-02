@@ -6,6 +6,10 @@
 from .._bidi import session as bidi_session
 from .._bidi import script as bidi_script
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class RealmTracker:
     """realm 生命周期追踪
@@ -30,8 +34,8 @@ class RealmTracker:
             r = bidi_session.subscribe(drv, ['script.realmCreated', 'script.realmDestroyed'],
                                        contexts=[self._owner._context_id])
             self._sub_id = r.get('subscription')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("订阅 realm 事件失败: %s", e)
         self._owner._driver.set_global_callback('script.realmCreated', self._on_created)
         self._owner._driver.set_global_callback('script.realmDestroyed', self._on_destroyed)
         # 初始化当前 realms
@@ -39,8 +43,8 @@ class RealmTracker:
             result = bidi_script.get_realms(drv, context=self._owner._context_id)
             for r in result.get('realms', []):
                 self._realms[r['realm']] = r
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("初始化 realm 列表失败: %s", e)
         return self
 
     def stop(self):
@@ -74,12 +78,16 @@ class RealmTracker:
             return
         self._realms[params['realm']] = params
         if self._created_cb:
-            try: self._created_cb(params)
-            except Exception: pass
+            try:
+                self._created_cb(params)
+            except Exception as e:
+                logger.warning("realm 创建回调异常: %s", e)
 
     def _on_destroyed(self, params):
         rid = params.get('realm', '')
         self._realms.pop(rid, None)
         if self._destroyed_cb:
-            try: self._destroyed_cb(rid)
-            except Exception: pass
+            try:
+                self._destroyed_cb(rid)
+            except Exception as e:
+                logger.warning("realm 销毁回调异常: %s", e)

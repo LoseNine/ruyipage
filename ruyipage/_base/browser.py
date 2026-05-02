@@ -50,7 +50,7 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
     host, port = address.rsplit(":", 1)
     try:
         port = int(port)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
     def _occupied_result(status_message="", error_message="", ws_url=""):
@@ -85,13 +85,17 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
     sock.settimeout(timeout)
     try:
         sock.connect((host, port))
-        sock.close()
     except Exception:
         try:
             sock.close()
         except Exception:
             pass
         return None
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
 
     driver = None
     session_owned = False
@@ -132,11 +136,13 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
         contexts = []
         try:
             windows = driver.run("browser.getClientWindows").get("clientWindows", [])
-        except Exception:
+        except Exception as e:
+            logger.debug("探测窗口信息失败: %s", e)
             windows = []
         try:
             contexts = bidi_context.get_tree(driver, max_depth=0).get("contexts", [])
-        except Exception:
+        except Exception as e:
+            logger.debug("探测上下文信息失败: %s", e)
             contexts = []
 
         return {
@@ -165,7 +171,8 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
                 for c in contexts
             ],
         }
-    except Exception:
+    except Exception as e:
+        logger.debug("探测 BiDi 地址失败 %s: %s", address, e)
         return None
     finally:
         if driver and not keep_driver:
@@ -240,7 +247,8 @@ def find_existing_browsers(
         for future in as_completed(future_map):
             try:
                 info = future.result()
-            except Exception:
+            except Exception as e:
+                logger.debug("端口扫描线程异常: %s", e)
                 info = None
             if info:
                 if info.get("probe_state", "attachable") == "attachable":
@@ -297,8 +305,8 @@ def find_existing_browsers_by_process(
                 cmd_ok = any(p in cmd for p in commandline_patterns)
                 if name_ok or cmd_ok:
                     pids.add(pid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
         if pids:
             ps_net = (
@@ -326,8 +334,8 @@ def find_existing_browsers_by_process(
                         and addr in ("127.0.0.1", "::1", "0.0.0.0")
                     ):
                         ports.add(port)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("进程扫描失败: %s", e)
 
     if not ports:
         return []
@@ -349,7 +357,8 @@ def find_existing_browsers_by_process(
         for future in as_completed(future_map):
             try:
                 info = future.result()
-            except Exception:
+            except Exception as e:
+                logger.debug("端口扫描线程异常: %s", e)
                 info = None
             if info:
                 info["scanned_ports"] = sorted(ports)
@@ -399,8 +408,8 @@ def find_candidate_ports_by_process(
                 cmd_ok = any(p in cmd for p in commandline_patterns)
                 if name_ok or cmd_ok:
                     pids.add(pid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
         if pids:
             ps_net = (
@@ -428,8 +437,8 @@ def find_candidate_ports_by_process(
                         and addr in ("127.0.0.1", "::1", "0.0.0.0")
                     ):
                         ports.add(port)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("进程扫描失败: %s", e)
 
     return sorted(ports)
 
@@ -1036,15 +1045,9 @@ class Firefox(object):
 
     def _is_port_open(self):
         """检查端口是否可达"""
+        from .._functions.tools import is_port_open
         host, port_str = self._address.rsplit(":", 1)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((host, int(port_str)))
-            sock.close()
-            return True
-        except Exception:
-            return False
+        return is_port_open(host, int(port_str), timeout=2)
 
     def _ensure_launch_port_available(self):
         """启动前确保目标端口未被其他进程占用。"""
@@ -1062,7 +1065,6 @@ class Firefox(object):
             old_port, new_port
         )
         logger.warning(message)
-        print(message)
 
     def _try_connect(self):
         """尝试连接到已有浏览器
@@ -1075,11 +1077,10 @@ class Firefox(object):
         # 先检查端口是否可达
         host, port = self._address.rsplit(":", 1)
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((host, int(port)))
-            sock.close()
-        except Exception:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2)
+                sock.connect((host, int(port)))
+        except (ConnectionRefusedError, socket.timeout, OSError):
             return False
 
         try:
@@ -1286,7 +1287,8 @@ class Firefox(object):
             status = bidi_session.status(self._driver)
             ready = status.get("ready", True)
             msg = status.get("message", "")
-        except Exception:
+        except Exception as e:
+            logger.debug("获取会话状态失败，默认 ready=True: %s", e)
             ready = True
             msg = ""
 
@@ -1544,8 +1546,8 @@ class Firefox(object):
         try:
             if getattr(self._options, "xpath_picker_enabled", False):
                 tab._reinject_xpath_picker_if_needed()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("XPath picker 初始注入失败: %s", e)
         return tab
 
     def _find_free_port(self, start=None):
@@ -1559,13 +1561,12 @@ class Firefox(object):
                 start = self._options.auto_port
 
         for port in range(start, start + 100):
+            if port in self._RESERVED_PORTS:
+                continue
             try:
-                if port in self._RESERVED_PORTS:
-                    continue
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(("127.0.0.1", port))
-                sock.close()
-                return port
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.bind(("127.0.0.1", port))
+                    return port
             except OSError:
                 continue
 

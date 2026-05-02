@@ -7,6 +7,10 @@ from queue import Empty, Queue
 from .._bidi import session as bidi_session
 from .._functions.queue_utils import queue_get as _queue_get
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class NavigationEvent(object):
     """导航事件快照。
@@ -139,7 +143,8 @@ class NavigationTracker(object):
                 contexts=[self._owner._context_id],
             )
             self._subscription_id = result.get("subscription")
-        except Exception:
+        except Exception as e:
+            logger.debug("订阅导航事件失败: %s", e)
             self._subscription_id = None
             self._events = []
             self._listening = False

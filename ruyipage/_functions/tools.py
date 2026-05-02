@@ -34,12 +34,11 @@ def wait_until(condition, timeout=10, interval=0.3):
 def is_port_open(host, port, timeout=2):
     """检查端口是否开放"""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, int(port)))
-        sock.close()
-        return True
-    except Exception:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect((host, int(port)))
+            return True
+    except (ConnectionRefusedError, socket.timeout, OSError):
         return False
 
 
@@ -47,10 +46,9 @@ def find_free_port(start=9222, end=9322):
     """查找可用端口"""
     for port in range(start, end):
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(('127.0.0.1', port))
-            sock.close()
-            return port
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(('127.0.0.1', port))
+                return port
         except OSError:
             continue
     raise RuntimeError('在端口范围 {}-{} 中找不到可用端口'.format(start, end))

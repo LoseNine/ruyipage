@@ -18,6 +18,9 @@ import os
 import re
 import logging
 
+from .._functions.pref_utils import parse_pref_value as _parse_pref_value
+from .._functions.pref_utils import format_pref_value as _format_pref_value
+
 logger = logging.getLogger('ruyipage')
 
 
@@ -59,8 +62,8 @@ class PrefBranch:
             val = m.get_pref(key)
             if val is not None:
                 return val
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Marionette 读取失败: %s", e)
 
         # 2. user.js 文件
         return self._read_user_js(key)
@@ -70,7 +73,8 @@ class PrefBranch:
         path = self._user_js()
         if not path or not os.path.exists(path):
             return {}
-        content = open(path, encoding='utf-8', errors='ignore').read()
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         result = {}
         for m in re.finditer(
                 r'user_pref\s*\(\s*["\'](.+?)["\'],\s*(.+?)\s*\)', content):
@@ -84,7 +88,8 @@ class PrefBranch:
         path = self._user_js()
         if not path or not os.path.exists(path):
             return None
-        content = open(path, encoding='utf-8', errors='ignore').read()
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         pattern = (r'user_pref\s*\(\s*["\']'
                    + re.escape(key) + r'["\'],\s*(.+?)\s*\)')
         m = re.search(pattern, content)
@@ -98,8 +103,10 @@ class PrefBranch:
         if not path:
             raise RuntimeError('未设置 profile 路径，无法写入 pref')
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        content = open(path, encoding='utf-8', errors='ignore').read() \
-            if os.path.exists(path) else ''
+        content = ''
+        if os.path.exists(path):
+            with open(path, encoding='utf-8', errors='ignore') as f:
+                content = f.read()
         line = 'user_pref("{}", {});'.format(key, _format_pref_value(value))
         pattern = r'user_pref\s*\(\s*["\']' + re.escape(key) + r'["\'].*?\);'
         if re.search(pattern, content):
@@ -114,38 +121,10 @@ class PrefBranch:
         path = self._user_js()
         if not path or not os.path.exists(path):
             return
-        content = open(path, encoding='utf-8', errors='ignore').read()
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         pattern = (r'\nuser_pref\s*\(\s*["\']'
                    + re.escape(key) + r'["\'].*?\);\n?')
         content = re.sub(pattern, '\n', content)
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
-
-
-def _parse_pref_value(v):
-    """解析 user.js 中的 pref 值字符串"""
-    if v == 'true':
-        return True
-    if v == 'false':
-        return False
-    if v.startswith('"') or v.startswith("'"):
-        return v[1:-1]
-    try:
-        return int(v)
-    except ValueError:
-        pass
-    try:
-        return float(v)
-    except ValueError:
-        return v
-
-
-def _format_pref_value(value):
-    """将 Python 值格式化为 user.js pref 值字符串"""
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    return '"{}"'.format(str(value).replace('\\', '\\\\').replace('"', '\\"'))

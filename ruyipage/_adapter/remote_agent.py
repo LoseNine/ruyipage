@@ -13,7 +13,6 @@ Firefox Remote Agent 通过 --remote-debugging-port 暴露两个端点：
 """
 
 import json
-import socket
 import subprocess
 import time
 import logging
@@ -41,28 +40,7 @@ def _probe_ws_url(ws_url, timeout=3):
                 pass
 
 
-def find_free_port(start=9222, end=9322):
-    """在 [start, end) 范围内找一个空闲端口"""
-    for port in range(start, end):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError("找不到空闲端口 [{}, {})".format(start, end))
-
-
-def is_port_open(host, port, timeout=1.0):
-    """检测端口是否可连接"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        try:
-            s.connect((host, port))
-            return True
-        except (ConnectionRefusedError, socket.timeout, OSError):
-            return False
+from .._functions.tools import find_free_port, is_port_open  # noqa: F401
 
 
 def get_bidi_ws_url(host, port, timeout=30):

@@ -7,6 +7,10 @@ from queue import Empty, Queue
 from .._bidi import session as bidi_session
 from .._functions.queue_utils import queue_get as _queue_get
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class BidiEvent(object):
     """单个 BiDi 事件对象。
@@ -117,7 +121,8 @@ class EventTracker(object):
                 contexts=ctxs,
             )
             self._subscription_id = result.get("subscription")
-        except Exception:
+        except Exception as e:
+            logger.debug("订阅事件失败: %s", e)
             self._subscription_id = None
             self._events = []
             self._listening = False

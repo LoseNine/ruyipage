@@ -178,8 +178,8 @@ class ConsoleListener(object):
         if cb:
             try:
                 cb(entry)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("控制台监听回调异常: %s", e)
 
     def _drain(self):
         while not self._queue.empty():

@@ -4867,8 +4867,27 @@ class FirefoxBase(BasePage):
                         accept=True,
                         user_text=str(self._prompt_handler_config.get("prompt_text")),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("自动处理对话框失败: %s", e)
+
+        def on_closed(params):
+            if params.get("context") != self.tab_id:
+                return
+            self._last_prompt_closed = dict(params)
+
+        self._driver._browser_driver.set_callback(
+            "browsingContext.userPromptOpened",
+            on_opened,
+            context=self.tab_id,
+            immediate=True,
+        )
+        self._driver._browser_driver.set_callback(
+            "browsingContext.userPromptClosed",
+            on_closed,
+            context=self.tab_id,
+            immediate=True,
+        )
+
 
         def on_closed(params):
             if params.get("context") != self.tab_id:
@@ -5067,8 +5086,8 @@ class FirefoxBase(BasePage):
                         user_text=str(password),
                     )
                     done.set()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("处理 HTTP 认证对话框失败: %s", e)
 
         def on_closed(params):
             if params.get("context") != self.tab_id:

@@ -761,8 +761,8 @@ class FirefoxElement(BaseElement):
                 target_elem._run_safe(
                     '(el) => el.scrollIntoView({block: "center", inline: "nearest"})'
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("拖拽前预滚动失败: %s", e)
 
             start = self._get_center()
             end = target_elem._get_center()

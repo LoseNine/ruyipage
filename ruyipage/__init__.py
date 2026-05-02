@@ -67,6 +67,8 @@ from .errors import (
     NoRectError,
     CanNotClickError,
     LocatorError,
+    IncorrectURLError,
+    NetworkInterceptError,
 )
 
 
@@ -514,6 +516,8 @@ __all__ = [
     "NoRectError",
     "CanNotClickError",
     "LocatorError",
+    "IncorrectURLError",
+    "NetworkInterceptError",
     # 便捷入口
     "launch",
     "attach",

@@ -7,6 +7,10 @@ from .._functions.settings import Settings
 from .._functions.sleep import sleep as _sleep
 from ..errors import WaitTimeoutError
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class PageWaiter(object):
     """页面级等待条件
@@ -181,8 +185,8 @@ class PageWaiter(object):
                 result = condition_fn()
                 if result is not None and result is not False:
                     return result
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("等待条件执行异常: %s", e)
 
             if time.time() >= end_time:
                 if Settings.raise_when_wait_failed:

@@ -18,6 +18,10 @@ import time
 from .._functions.keys import Keys
 from .._functions.sleep import sleep as _sleep
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class Actions(object):
     """动作链管理器（页面级）
@@ -548,8 +552,8 @@ class Actions(object):
                 try:
                     self._owner.scroll.to_see(ele_or_loc, center=True)
                     _sleep(random.uniform(0.1, 0.2))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("预滚动元素到视口失败: %s", e)
 
         algorithm = self._resolve_human_algorithm(algorithm)
         path = self._build_human_move_path(

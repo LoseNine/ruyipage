@@ -8,7 +8,8 @@ Firefox BiDi script.evaluate 在内容沙箱中无法访问 Services.prefs。
 3. 直接写入：通过 profile user.js 文件操作（需重启生效）
 """
 import os
-import json
+
+from .._functions.pref_utils import parse_pref_value, format_pref_value
 
 
 class PrefsManager:
@@ -50,18 +51,13 @@ class PrefsManager:
         if not os.path.exists(user_js):
             return None
         import re
-        content = open(user_js, encoding='utf-8', errors='ignore').read()
+        with open(user_js, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         pattern = r'user_pref\s*\(\s*["\']' + re.escape(key) + r'["\'],\s*(.+?)\s*\)'
         m = re.search(pattern, content)
         if not m:
             return None
-        val = m.group(1).strip()
-        if val == 'true': return True
-        if val == 'false': return False
-        if val.startswith('"') or val.startswith("'"):
-            return val[1:-1]
-        try: return int(val)
-        except Exception: return val
+        return parse_pref_value(m.group(1).strip())
 
     def set(self, key: str, value):
         """写入 pref 到 user.js（持久化，重启后生效）"""
@@ -76,14 +72,10 @@ class PrefsManager:
         import re
         content = ''
         if os.path.exists(user_js):
-            content = open(user_js, encoding='utf-8', errors='ignore').read()
+            with open(user_js, encoding='utf-8', errors='ignore') as f:
+                content = f.read()
         # 格式化值
-        if isinstance(value, bool):
-            val_str = 'true' if value else 'false'
-        elif isinstance(value, int):
-            val_str = str(value)
-        else:
-            val_str = '"{}"'.format(str(value).replace('\\', '\\\\').replace('"', '\\"'))
+        val_str = format_pref_value(value)
         line = 'user_pref("{}", {});'.format(key, val_str)
         pattern = r'user_pref\s*\(\s*["\']' + re.escape(key) + r'["\'].*?\);'
         if re.search(pattern, content):
@@ -102,7 +94,8 @@ class PrefsManager:
         if not os.path.exists(user_js):
             return
         import re
-        content = open(user_js, encoding='utf-8', errors='ignore').read()
+        with open(user_js, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         pattern = r'\nuser_pref\s*\(\s*["\']' + re.escape(key) + r'["\'].*?\);\n?'
         content = re.sub(pattern, '\n', content)
         with open(user_js, 'w', encoding='utf-8') as f:
@@ -117,18 +110,14 @@ class PrefsManager:
         if not os.path.exists(user_js):
             return {}
         import re
-        content = open(user_js, encoding='utf-8', errors='ignore').read()
+        with open(user_js, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         result = {}
         for m in re.finditer(r'user_pref\s*\(\s*["\'](.+?)["\'],\s*(.+?)\s*\)', content):
             k, v = m.group(1), m.group(2).strip()
             if not k.startswith(prefix):
                 continue
-            if v == 'true': result[k] = True
-            elif v == 'false': result[k] = False
-            elif v.startswith('"') or v.startswith("'"): result[k] = v[1:-1]
-            else:
-                try: result[k] = int(v)
-                except Exception: result[k] = v
+            result[k] = parse_pref_value(v)
         return result
 
     def save_to_profile(self):

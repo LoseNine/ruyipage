@@ -19,29 +19,9 @@ import re
 import json
 import logging
 
+from .._functions.pref_utils import parse_pref_value as _parse, format_pref_value as _fmt
+
 logger = logging.getLogger('ruyipage')
-
-# ── 值序列化/反序列化 ─────────────────────────────────────────────────────
-
-def _fmt(value) -> str:
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, int):
-        return str(value)
-    return '"{}"'.format(str(value).replace('\\', '\\\\').replace('"', '\\"'))
-
-
-def _parse(v: str):
-    v = v.strip()
-    if v == 'true':  return True
-    if v == 'false': return False
-    if v.startswith('"') or v.startswith("'"):
-        return v[1:-1]
-    try:    return int(v)
-    except ValueError: pass
-    try:    return float(v)
-    except ValueError: return v
-
 
 # ── user.js / prefs.js 读写 ───────────────────────────────────────────────
 
@@ -54,7 +34,8 @@ class _JsPrefsFile:
     def read_all(self) -> dict:
         if not os.path.exists(self.path):
             return {}
-        content = open(self.path, encoding='utf-8', errors='ignore').read()
+        with open(self.path, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         result = {}
         for m in re.finditer(
                 r'user_pref\s*\(\s*["\'](.+?)["\'],\s*(.+?)\s*\)', content):
@@ -64,7 +45,8 @@ class _JsPrefsFile:
     def read(self, key: str):
         if not os.path.exists(self.path):
             return None
-        content = open(self.path, encoding='utf-8', errors='ignore').read()
+        with open(self.path, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         m = re.search(
             r'user_pref\s*\(\s*["\']' + re.escape(key) + r'["\'],\s*(.+?)\s*\)',
             content)
@@ -72,8 +54,10 @@ class _JsPrefsFile:
 
     def write(self, key: str, value):
         os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
-        content = open(self.path, encoding='utf-8', errors='ignore').read() \
-            if os.path.exists(self.path) else ''
+        content = ''
+        if os.path.exists(self.path):
+            with open(self.path, encoding='utf-8', errors='ignore') as f:
+                content = f.read()
         line = 'user_pref("{}", {});'.format(key, _fmt(value))
         pat = r'user_pref\s*\(\s*["\']' + re.escape(key) + r'["\'].*?\);'
         if re.search(pat, content):
@@ -90,7 +74,8 @@ class _JsPrefsFile:
     def remove(self, key: str):
         if not os.path.exists(self.path):
             return
-        content = open(self.path, encoding='utf-8', errors='ignore').read()
+        with open(self.path, encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         pat = r'\nuser_pref\s*\(\s*["\']' + re.escape(key) + r'["\'].*?\);\n?'
         content = re.sub(pat, '\n', content)
         with open(self.path, 'w', encoding='utf-8') as f:
@@ -220,8 +205,8 @@ class ConfigManager:
                 val = m.get_pref(key)
                 if val is not None:
                     return val
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Marionette 读取失败，降级到 user.js: %s", e)
         # 2. user.js
         if self._user_js:
             val = self._user_js.read(key)

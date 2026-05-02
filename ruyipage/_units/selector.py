@@ -10,6 +10,10 @@
 from .._functions.keys import Keys
 from .._functions.bidi_values import make_shared_ref
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class SelectElement(object):
     """<select> 元素管理器。
@@ -107,8 +111,8 @@ class SelectElement(object):
         # 在派发 pointer 动作前尽量激活当前 context
         try:
             driver.run("browsingContext.activate", {"context": context_id})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("激活上下文失败: %s", e)
 
         driver.run(
             "input.performActions",

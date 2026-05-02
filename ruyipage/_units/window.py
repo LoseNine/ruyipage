@@ -100,8 +100,8 @@ class WindowManager(object):
             x = int(max(0, (sw - ww) / 2))
             y = int(max(0, (sh - wh) / 2))
             self.set_position(x, y)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("窗口居中失败: %s", e)
         return self._owner
 
     @property

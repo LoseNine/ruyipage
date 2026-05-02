@@ -431,7 +431,8 @@ class InterceptedRequest(object):
 
         try:
             data = self._collector.get(self.request_id, data_type="request")
-        except Exception:
+        except Exception as e:
+            logger.debug("获取请求体失败: %s", e)
             return None
 
         decoded = self._decode_body_value(getattr(data, "bytes", None))
@@ -1121,7 +1122,8 @@ class Interceptor(object):
                     ["beforeRequestSent"],
                     data_types=["request"],
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug("启动请求数据收集器失败: %s", e)
                 self._request_collector = None
 
         if collect_response:
@@ -1130,7 +1132,8 @@ class Interceptor(object):
                     ["responseCompleted"],
                     data_types=["response"],
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug("启动响应数据收集器失败: %s", e)
                 self._response_collector = None
 
         # 注册拦截

@@ -17,6 +17,10 @@ from .._bidi import session as bidi_session
 from .._functions.sleep import sleep as _sleep
 from .._functions.queue_utils import queue_get as _queue_get
 
+import logging
+
+logger = logging.getLogger('ruyipage')
+
 
 class DownloadEvent(object):
     """下载事件快照。
@@ -192,7 +196,8 @@ class DownloadsManager(object):
                 contexts=[self._owner._context_id],
             )
             self._subscription_id = result.get("subscription")
-        except Exception:
+        except Exception as e:
+            logger.debug("订阅下载事件失败: %s", e)
             self._subscription_id = None
             self._listening = False
             return False
