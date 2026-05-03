@@ -115,3 +115,21 @@ def test_release_gate_private_mode(opts_factory, temp_user_dir):
         assert page.url == "about:blank"
     finally:
         page.quit()
+
+
+@pytest.mark.release
+def test_release_gate_actions_offset_no_accumulation(page, fixture_page_url):
+    """1.2.5 修复回归：连续多次 move_to(offset_x=, offset_y=) 不应累加。"""
+    page.set.viewport(1280, 900)
+    page.get(fixture_page_url("fixed_point_target.html"))
+    page.run_js("window.__resetClicks()")
+
+    for _ in range(3):
+        page.actions.move_to(offset_x=421, offset_y=637).click().perform()
+        page.wait(0.2)
+
+    clicks = page.run_js("return window.__clicks")
+    assert len(clicks) == 3
+    for rec in clicks:
+        assert rec["x"] == 421 and rec["y"] == 637
+        assert rec["target"] == "target"

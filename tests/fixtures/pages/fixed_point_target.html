@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Fixed Point Target</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #target {
+      position: absolute;
+      left: 400px; top: 600px;
+      width: 80px; height: 80px;
+      background: #ff5252;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div id="target">target</div>
+  <script>
+    window.__clicks = [];
+    window.__lastClick = null;
+    window.__hitTarget = false;
+
+    window.__resetClicks = function () {
+      window.__clicks = [];
+      window.__lastClick = null;
+      window.__hitTarget = false;
+    };
+
+    document.addEventListener('click', function (e) {
+      var rec = {
+        n: window.__clicks.length + 1,
+        x: e.clientX,
+        y: e.clientY,
+        target: e.target.id || e.target.tagName,
+        trusted: e.isTrusted,
+      };
+      window.__clicks.push(rec);
+      window.__lastClick = rec;
+      if (e.target.id === 'target') {
+        window.__hitTarget = true;
+      }
+    });
+
+    window.__ruyi_fixture_ready = true;
+  </script>
+</body>
+</html>
