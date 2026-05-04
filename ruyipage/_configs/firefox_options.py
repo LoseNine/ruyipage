@@ -483,6 +483,48 @@ class FirefoxOptions(object):
         self._fpfile = path
         return self
 
+    def smart_fingerprint(self, **kwargs):
+        """一站式智能指纹配置（链式调用入口）。
+
+        基于 ``firefox-fingerprintBrowser`` 内核与 ruyipage 内置的 22 套
+        Windows 真机硬件特征 + 30 国语言映射，自动完成：
+
+        1. 出口 IP / 地理位置探测（5 个数据源回退，可选 IPv6 富化）；
+        2. 国家校验（``require_country`` 不匹配直接抛 ``CountryMismatchError``）；
+        3. 随机抽取硬件指纹 + 拼装 Firefox 151 ±2 UA + 随机 canvas 种子；
+        4. 写入符合内核 ``key:value`` 字段顺序的 ``fpfile.txt``；
+        5. 自动配置当前 ``FirefoxOptions``：proxy / userdir / fpfile / 窗口大小。
+
+        所有关键字参数透传到 :func:`ruyipage.apply_smart_fingerprint`，常用
+        参数包括 ``proxy_host`` / ``proxy_port`` / ``proxy_user`` / ``proxy_pwd``
+        / ``require_country`` / ``base_dir`` / ``logger`` 等。
+
+        Returns:
+            FingerprintContext: 指纹上下文。可调用 ``ctx.apply_emulation(page)``
+            注入 BiDi 仿真覆盖层，或 ``ctx.summary()`` 输出单行日志。
+
+        Raises:
+            CountryMismatchError: 出口 IP 国家与 ``require_country`` 不一致。
+            GeoError: 5 个 geo 数据源全部失败。
+            FingerprintConfigError: 内置 JSON 数据文件损坏。
+
+        Example::
+
+            opts = FirefoxOptions().set_port(9222)
+            opts.set_browser_path(r"C:/Program Files/Mozilla Firefox/firefox.exe")
+            ctx = opts.smart_fingerprint(
+                proxy_host="proxy.example.com", proxy_port=8080,
+                proxy_user="u", proxy_pwd="p",
+                require_country="US",
+                logger=print,
+            )
+            page = FirefoxPage(opts)
+            ctx.apply_emulation(page)
+        """
+        # Lazy import 避免与 ruyipage.__init__ 的循环依赖。
+        from .._fingerprint import apply_smart_fingerprint
+        return apply_smart_fingerprint(self, **kwargs)
+
     def private_mode(self, on_off=True):
         """设置 Firefox 私密浏览模式。
 

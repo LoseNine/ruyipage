@@ -70,6 +70,26 @@ from .errors import (
     IncorrectURLError,
     NetworkInterceptError,
 )
+from ._fingerprint import (
+    apply_smart_fingerprint,
+    FingerprintContext,
+    fetch_geo_info,
+    fetch_public_ipv6,
+    pick_fingerprint,
+    write_fpfile,
+    build_proxies_dict,
+    list_hardware_profiles,
+    get_country_profile,
+    GeoInfo,
+    WebGLProfile,
+    HardwareProfile,
+    CountryProfile,
+    FingerprintProfile,
+    FingerprintError,
+    FingerprintConfigError,
+    GeoError,
+    CountryMismatchError,
+)
 
 
 def _page_from_existing_browser_info(info, tab_index=1, latest_tab=False):
@@ -526,6 +546,25 @@ __all__ = [
     "find_exist_browsers",
     "find_exist_browsers_by_process",
     "auto_attach_exist_browser_by_process",
+    # 智能指纹一站式 API
+    "apply_smart_fingerprint",
+    "FingerprintContext",
+    "fetch_geo_info",
+    "fetch_public_ipv6",
+    "pick_fingerprint",
+    "write_fpfile",
+    "build_proxies_dict",
+    "list_hardware_profiles",
+    "get_country_profile",
+    "GeoInfo",
+    "WebGLProfile",
+    "HardwareProfile",
+    "CountryProfile",
+    "FingerprintProfile",
+    "FingerprintError",
+    "FingerprintConfigError",
+    "GeoError",
+    "CountryMismatchError",
     # 版本
     "__version__",
 ]

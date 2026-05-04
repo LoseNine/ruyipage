@@ -7,8 +7,9 @@ build/
 dist/
 *.egg-info/
 ruyiPage.egg-info/
-pyproject.toml
-MANIFEST.in
+
+# Temp fingerprint profiles
+userdir_*/
 
 # Local tool cache
 .ruff_cache/

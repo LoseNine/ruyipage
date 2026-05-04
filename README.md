@@ -1538,6 +1538,75 @@ page.extensions.uninstall(ext_id)
 - `42_xpath_picker_complex_showcase.py` 启动 XPath picker，并打开包含复杂节点、shadow root、嵌套 iframe 的综合展示页
 - `42_3_debug_px_context_probe.py` 直接打开 `debug_px.html`，打印 PX challenge iframe 的 browsing context 树，并尝试 attach 到 child context 做最小 DOM / canvas 诊断
 - `46_human_behavior_showcase.py` 演示 bezier / windmouse 两套拟人轨迹算法，并开启鼠标行为可视化
+- `48_smart_fingerprint.py` 演示 `apply_smart_fingerprint()` 一站式智能指纹（geo 探测 + 内核 fpfile + BiDi 仿真）
+
+---
+
+## 智能指纹一站式 API
+
+`ruyiPage` 在 [`firefox-fingerprintBrowser`](https://github.com/LoseNine/firefox-fingerprintBrowser)
+内核之上提供了开箱即用的 **智能指纹** 能力：一行代码完成「探测出口 IP →
+匹配语言/时区/语音 → 抽取 22 套真机硬件特征 → 写出 `fpfile.txt` → 配置
+`FirefoxOptions`」全流程。
+
+### 一行链式调用
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage, CountryMismatchError
+
+opts = FirefoxOptions().set_port(9222)
+opts.set_browser_path(r"C:/Program Files/Mozilla Firefox/firefox.exe")
+
+ctx = opts.smart_fingerprint(
+    proxy_host="proxy.example.com", proxy_port=8080,
+    proxy_user="u", proxy_pwd="p",
+    require_country="US",      # 出口 IP 国家不一致 → CountryMismatchError
+    logger=print,
+)
+
+page = FirefoxPage(opts)
+ctx.apply_emulation(page)       # 内核 fpfile 之上再叠加 BiDi 仿真
+page.get("https://browserleaks.com/webgl")
+```
+
+或者直接调用顶层函数 `apply_smart_fingerprint(opts, ...)`，效果一致。
+
+### 流水线说明
+
+1. `build_proxies_dict(...)` — 组装 `requests` 风格的 proxies。
+2. `fetch_geo_info(...)` — 5 数据源回退（geojs / ipapi / ipwho / ip-api /
+   ipinfo）；`require_country` 不匹配立即抛 `CountryMismatchError`。
+3. `fetch_public_ipv6(...)` — best-effort，失败则 `*_webrtc_ipv6` 整行省略。
+4. 自动生成 / 复用 `userdir`，写入符合内核字段顺序的 `fpfile.txt`。
+5. 在 `FirefoxOptions` 上自动 `set_proxy / set_user_dir / set_fpfile /
+   set_window_size`，每一步都可单独关闭。
+6. 返回 `FingerprintContext`：
+   - `ctx.summary()` — 单行日志；
+   - `ctx.apply_emulation(page)` — geolocation / locale / timezone /
+     Accept-Language 四重 BiDi 仿真覆盖（每一步独立 `try/except`，
+     旧版 ruyipage 优雅降级）；
+   - `ctx.to_dict()` — 持久化指纹身份（账号库等）。
+
+### 内置数据资产
+
+- 22 套 Windows 真机硬件特征（NVIDIA RTX 系 + AMD RX 系 + Intel UHD/Arc）。
+- 30+ 国语言 / Accept-Language / 微软语音映射，含 `_default` 兜底。
+- Firefox 主版本锁定 151，仅在 minor 上 `±2` 抖动，避免 UA 主号穿帮。
+
+### 异常体系
+
+```
+FingerprintError
+├── FingerprintConfigError      # 内置 JSON 损坏（部署期错误）
+└── GeoError                    # 5 个 geo 数据源全部失败
+    └── CountryMismatchError    # 出口 IP 国家与 require_country 不一致
+        # 属性：actual / required
+```
+
+完整字段定义、低层接口（`pick_fingerprint` / `write_fpfile` /
+`list_hardware_profiles` / `get_country_profile`）见
+[`ruyipage/_fingerprint/README.md`](ruyipage/_fingerprint/README.md)
+与示例 `examples/48_smart_fingerprint.py`。
 
 ---
 

@@ -1,0 +1,408 @@
+{
+  "schema_version": 1,
+  "countries": {
+    "US": {
+      "language": "en-US,en",
+      "language_primary": "en-US",
+      "accept_language": "en-US,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft David Desktop - English (United States)", "Microsoft Zira Desktop - English (United States)", "Microsoft Mark - English (United States)"],
+        "local_langs": ["en-US", "en-US", "en-US"],
+        "remote": ["Google US English", "Google UK English Female"],
+        "remote_langs": ["en-US", "en-GB"],
+        "default_name": "Microsoft David Desktop - English (United States)",
+        "default_lang": "en-US"
+      }
+    },
+    "CA": {
+      "language": "en-CA,en",
+      "language_primary": "en-CA",
+      "accept_language": "en-CA,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft Linda - English (Canada)", "Microsoft Richard - English (Canada)"],
+        "local_langs": ["en-CA", "en-CA"],
+        "remote": ["Google US English"],
+        "remote_langs": ["en-US"],
+        "default_name": "Microsoft Linda - English (Canada)",
+        "default_lang": "en-CA"
+      }
+    },
+    "GB": {
+      "language": "en-GB,en",
+      "language_primary": "en-GB",
+      "accept_language": "en-GB,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft Hazel Desktop - English (Great Britain)", "Microsoft George - English (United Kingdom)", "Microsoft Susan - English (United Kingdom)"],
+        "local_langs": ["en-GB", "en-GB", "en-GB"],
+        "remote": ["Google UK English Female", "Google UK English Male"],
+        "remote_langs": ["en-GB", "en-GB"],
+        "default_name": "Microsoft Hazel Desktop - English (Great Britain)",
+        "default_lang": "en-GB"
+      }
+    },
+    "AU": {
+      "language": "en-AU,en",
+      "language_primary": "en-AU",
+      "accept_language": "en-AU,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft Catherine - English (Australia)", "Microsoft James - English (Australia)"],
+        "local_langs": ["en-AU", "en-AU"],
+        "remote": ["Google UK English Female"],
+        "remote_langs": ["en-GB"],
+        "default_name": "Microsoft Catherine - English (Australia)",
+        "default_lang": "en-AU"
+      }
+    },
+    "NZ": {
+      "language": "en-NZ,en",
+      "language_primary": "en-NZ",
+      "accept_language": "en-NZ,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft Mitchell - English (New Zealand)", "Microsoft Molly - English (New Zealand)"],
+        "local_langs": ["en-NZ", "en-NZ"],
+        "remote": ["Google UK English Female"],
+        "remote_langs": ["en-GB"],
+        "default_name": "Microsoft Mitchell - English (New Zealand)",
+        "default_lang": "en-NZ"
+      }
+    },
+    "IE": {
+      "language": "en-IE,en",
+      "language_primary": "en-IE",
+      "accept_language": "en-IE,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft Sean - English (Ireland)"],
+        "local_langs": ["en-IE"],
+        "remote": ["Google UK English Female"],
+        "remote_langs": ["en-GB"],
+        "default_name": "Microsoft Sean - English (Ireland)",
+        "default_lang": "en-IE"
+      }
+    },
+    "IN": {
+      "language": "en-IN,en,hi",
+      "language_primary": "en-IN",
+      "accept_language": "en-IN,en;q=0.9,hi;q=0.8",
+      "speech": {
+        "local": ["Microsoft Heera - English (India)", "Microsoft Ravi - English (India)"],
+        "local_langs": ["en-IN", "en-IN"],
+        "remote": ["Google UK English Female"],
+        "remote_langs": ["en-GB"],
+        "default_name": "Microsoft Heera - English (India)",
+        "default_lang": "en-IN"
+      }
+    },
+    "SG": {
+      "language": "en-SG,en",
+      "language_primary": "en-SG",
+      "accept_language": "en-SG,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft Wayne - English (Singapore)"],
+        "local_langs": ["en-SG"],
+        "remote": ["Google US English"],
+        "remote_langs": ["en-US"],
+        "default_name": "Microsoft Wayne - English (Singapore)",
+        "default_lang": "en-SG"
+      }
+    },
+    "MY": {
+      "language": "en-MY,en,ms",
+      "language_primary": "en-MY",
+      "accept_language": "en-MY,en;q=0.9,ms;q=0.8",
+      "speech": {
+        "local": ["Microsoft Rizwan - English (Malaysia)"],
+        "local_langs": ["en-MY"],
+        "remote": ["Google US English"],
+        "remote_langs": ["en-US"],
+        "default_name": "Microsoft Rizwan - English (Malaysia)",
+        "default_lang": "en-MY"
+      }
+    },
+    "JP": {
+      "language": "ja-JP,ja",
+      "language_primary": "ja-JP",
+      "accept_language": "ja-JP,ja;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Haruka Desktop - Japanese", "Microsoft Ichiro Desktop - Japanese", "Microsoft Ayumi - Japanese (Japan)"],
+        "local_langs": ["ja-JP", "ja-JP", "ja-JP"],
+        "remote": ["Google 日本語"],
+        "remote_langs": ["ja-JP"],
+        "default_name": "Microsoft Haruka Desktop - Japanese",
+        "default_lang": "ja-JP"
+      }
+    },
+    "KR": {
+      "language": "ko-KR,ko",
+      "language_primary": "ko-KR",
+      "accept_language": "ko-KR,ko;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Heami Desktop - Korean", "Microsoft Sun-Hi - Korean (Korea)"],
+        "local_langs": ["ko-KR", "ko-KR"],
+        "remote": ["Google 한국의"],
+        "remote_langs": ["ko-KR"],
+        "default_name": "Microsoft Heami Desktop - Korean",
+        "default_lang": "ko-KR"
+      }
+    },
+    "TW": {
+      "language": "zh-TW,zh",
+      "language_primary": "zh-TW",
+      "accept_language": "zh-TW,zh;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Hanhan Desktop - Chinese (Taiwan)", "Microsoft Zhiwei - Chinese (Taiwan)"],
+        "local_langs": ["zh-TW", "zh-TW"],
+        "remote": ["Google 國語（臺灣）"],
+        "remote_langs": ["zh-TW"],
+        "default_name": "Microsoft Hanhan Desktop - Chinese (Taiwan)",
+        "default_lang": "zh-TW"
+      }
+    },
+    "HK": {
+      "language": "zh-HK,zh,en",
+      "language_primary": "zh-HK",
+      "accept_language": "zh-HK,zh;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Tracy - Chinese (Hong Kong)", "Microsoft Danny - Chinese (Hong Kong)"],
+        "local_langs": ["zh-HK", "zh-HK"],
+        "remote": ["Google 粤語（香港）"],
+        "remote_langs": ["zh-HK"],
+        "default_name": "Microsoft Tracy - Chinese (Hong Kong)",
+        "default_lang": "zh-HK"
+      }
+    },
+    "CN": {
+      "language": "zh-CN,zh",
+      "language_primary": "zh-CN",
+      "accept_language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Huihui Desktop - Chinese (Simplified)", "Microsoft Kangkang Desktop - Chinese (Simplified)", "Microsoft Yaoyao Desktop - Chinese (Simplified)"],
+        "local_langs": ["zh-CN", "zh-CN", "zh-CN"],
+        "remote": ["Google 普通话（中国大陆）"],
+        "remote_langs": ["zh-CN"],
+        "default_name": "Microsoft Huihui Desktop - Chinese (Simplified)",
+        "default_lang": "zh-CN"
+      }
+    },
+    "TH": {
+      "language": "th-TH,th,en",
+      "language_primary": "th-TH",
+      "accept_language": "th-TH,th;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Pattara - Thai (Thailand)"],
+        "local_langs": ["th-TH"],
+        "remote": ["Google ภาษาไทย"],
+        "remote_langs": ["th-TH"],
+        "default_name": "Microsoft Pattara - Thai (Thailand)",
+        "default_lang": "th-TH"
+      }
+    },
+    "VN": {
+      "language": "vi-VN,vi,en",
+      "language_primary": "vi-VN",
+      "accept_language": "vi-VN,vi;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft An - Vietnamese (Vietnam)"],
+        "local_langs": ["vi-VN"],
+        "remote": ["Google Tiếng Việt"],
+        "remote_langs": ["vi-VN"],
+        "default_name": "Microsoft An - Vietnamese (Vietnam)",
+        "default_lang": "vi-VN"
+      }
+    },
+    "PH": {
+      "language": "en-PH,en,fil",
+      "language_primary": "en-PH",
+      "accept_language": "en-PH,en;q=0.9,fil;q=0.8",
+      "speech": {
+        "local": ["Microsoft Rosa - English (Philippines)"],
+        "local_langs": ["en-PH"],
+        "remote": ["Google US English"],
+        "remote_langs": ["en-US"],
+        "default_name": "Microsoft Rosa - English (Philippines)",
+        "default_lang": "en-PH"
+      }
+    },
+    "ID": {
+      "language": "id-ID,id,en",
+      "language_primary": "id-ID",
+      "accept_language": "id-ID,id;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Andika - Indonesian (Indonesia)"],
+        "local_langs": ["id-ID"],
+        "remote": ["Google Bahasa Indonesia"],
+        "remote_langs": ["id-ID"],
+        "default_name": "Microsoft Andika - Indonesian (Indonesia)",
+        "default_lang": "id-ID"
+      }
+    },
+    "DE": {
+      "language": "de-DE,de",
+      "language_primary": "de-DE",
+      "accept_language": "de-DE,de;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Hedda Desktop - German", "Microsoft Stefan - German (Germany)", "Microsoft Katja - German (Germany)"],
+        "local_langs": ["de-DE", "de-DE", "de-DE"],
+        "remote": ["Google Deutsch"],
+        "remote_langs": ["de-DE"],
+        "default_name": "Microsoft Hedda Desktop - German",
+        "default_lang": "de-DE"
+      }
+    },
+    "FR": {
+      "language": "fr-FR,fr",
+      "language_primary": "fr-FR",
+      "accept_language": "fr-FR,fr;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Hortense Desktop - French", "Microsoft Paul - French (France)", "Microsoft Julie - French (France)"],
+        "local_langs": ["fr-FR", "fr-FR", "fr-FR"],
+        "remote": ["Google français"],
+        "remote_langs": ["fr-FR"],
+        "default_name": "Microsoft Hortense Desktop - French",
+        "default_lang": "fr-FR"
+      }
+    },
+    "ES": {
+      "language": "es-ES,es",
+      "language_primary": "es-ES",
+      "accept_language": "es-ES,es;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Helena Desktop - Spanish (Spain)", "Microsoft Pablo - Spanish (Spain)", "Microsoft Laura - Spanish (Spain)"],
+        "local_langs": ["es-ES", "es-ES", "es-ES"],
+        "remote": ["Google español"],
+        "remote_langs": ["es-ES"],
+        "default_name": "Microsoft Helena Desktop - Spanish (Spain)",
+        "default_lang": "es-ES"
+      }
+    },
+    "IT": {
+      "language": "it-IT,it",
+      "language_primary": "it-IT",
+      "accept_language": "it-IT,it;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Elsa Desktop - Italian (Italy)", "Microsoft Cosimo - Italian (Italy)"],
+        "local_langs": ["it-IT", "it-IT"],
+        "remote": ["Google italiano"],
+        "remote_langs": ["it-IT"],
+        "default_name": "Microsoft Elsa Desktop - Italian (Italy)",
+        "default_lang": "it-IT"
+      }
+    },
+    "NL": {
+      "language": "nl-NL,nl,en",
+      "language_primary": "nl-NL",
+      "accept_language": "nl-NL,nl;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Frank - Dutch (Netherlands)"],
+        "local_langs": ["nl-NL"],
+        "remote": ["Google Nederlands"],
+        "remote_langs": ["nl-NL"],
+        "default_name": "Microsoft Frank - Dutch (Netherlands)",
+        "default_lang": "nl-NL"
+      }
+    },
+    "SE": {
+      "language": "sv-SE,sv,en",
+      "language_primary": "sv-SE",
+      "accept_language": "sv-SE,sv;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Bengt - Swedish (Sweden)"],
+        "local_langs": ["sv-SE"],
+        "remote": ["Google svenska"],
+        "remote_langs": ["sv-SE"],
+        "default_name": "Microsoft Bengt - Swedish (Sweden)",
+        "default_lang": "sv-SE"
+      }
+    },
+    "PL": {
+      "language": "pl-PL,pl,en",
+      "language_primary": "pl-PL",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Paulina Desktop - Polish", "Microsoft Adam - Polish (Poland)"],
+        "local_langs": ["pl-PL", "pl-PL"],
+        "remote": ["Google polski"],
+        "remote_langs": ["pl-PL"],
+        "default_name": "Microsoft Paulina Desktop - Polish",
+        "default_lang": "pl-PL"
+      }
+    },
+    "RU": {
+      "language": "ru-RU,ru,en",
+      "language_primary": "ru-RU",
+      "accept_language": "ru-RU,ru;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Irina Desktop - Russian", "Microsoft Pavel - Russian (Russia)"],
+        "local_langs": ["ru-RU", "ru-RU"],
+        "remote": ["Google русский"],
+        "remote_langs": ["ru-RU"],
+        "default_name": "Microsoft Irina Desktop - Russian",
+        "default_lang": "ru-RU"
+      }
+    },
+    "TR": {
+      "language": "tr-TR,tr,en",
+      "language_primary": "tr-TR",
+      "accept_language": "tr-TR,tr;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Tolga - Turkish (Turkey)"],
+        "local_langs": ["tr-TR"],
+        "remote": ["Google Türkçe"],
+        "remote_langs": ["tr-TR"],
+        "default_name": "Microsoft Tolga - Turkish (Turkey)",
+        "default_lang": "tr-TR"
+      }
+    },
+    "BR": {
+      "language": "pt-BR,pt,en",
+      "language_primary": "pt-BR",
+      "accept_language": "pt-BR,pt;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Maria - Portuguese (Brazil)", "Microsoft Daniel - Portuguese (Brazil)", "Microsoft Heloisa Desktop - Portuguese (Brazil)"],
+        "local_langs": ["pt-BR", "pt-BR", "pt-BR"],
+        "remote": ["Google português do Brasil"],
+        "remote_langs": ["pt-BR"],
+        "default_name": "Microsoft Maria - Portuguese (Brazil)",
+        "default_lang": "pt-BR"
+      }
+    },
+    "MX": {
+      "language": "es-MX,es,en",
+      "language_primary": "es-MX",
+      "accept_language": "es-MX,es;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Sabina Desktop - Spanish (Mexico)", "Microsoft Raul - Spanish (Mexico)"],
+        "local_langs": ["es-MX", "es-MX"],
+        "remote": ["Google español de Estados Unidos"],
+        "remote_langs": ["es-US"],
+        "default_name": "Microsoft Sabina Desktop - Spanish (Mexico)",
+        "default_lang": "es-MX"
+      }
+    },
+    "AR": {
+      "language": "es-AR,es,en",
+      "language_primary": "es-AR",
+      "accept_language": "es-AR,es;q=0.9,en;q=0.8",
+      "speech": {
+        "local": ["Microsoft Elena - Spanish (Argentina)"],
+        "local_langs": ["es-AR"],
+        "remote": ["Google español"],
+        "remote_langs": ["es-ES"],
+        "default_name": "Microsoft Elena - Spanish (Argentina)",
+        "default_lang": "es-AR"
+      }
+    },
+    "_default": {
+      "language": "en-US,en",
+      "language_primary": "en-US",
+      "accept_language": "en-US,en;q=0.9",
+      "speech": {
+        "local": ["Microsoft David Desktop - English (United States)", "Microsoft Zira Desktop - English (United States)"],
+        "local_langs": ["en-US", "en-US"],
+        "remote": ["Google US English"],
+        "remote_langs": ["en-US"],
+        "default_name": "Microsoft David Desktop - English (United States)",
+        "default_lang": "en-US"
+      }
+    }
+  }
+}
