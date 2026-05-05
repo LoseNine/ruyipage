@@ -3661,6 +3661,7 @@ class FirefoxBase(BasePage):
         nav_lock = self._browser.get_context_nav_lock(self._context_id)
 
         with nav_lock:
+            _nav_timed_out = False
             try:
                 bidi_context.navigate(
                     self._driver._browser_driver, self._context_id, url, wait=wait,
@@ -3672,6 +3673,7 @@ class FirefoxBase(BasePage):
                     logger.debug("导航被页面主动中断（通常是自动刷新/跳转）: %s", e)
                 elif "timeout" in str(e.error).lower():
                     logger.warning("导航超时: %s -> %s (%s)", url, e.bidi_message, e.error)
+                    _nav_timed_out = True
                     snap = self._capture_failure_snapshot(e)
                     if snap and snap.saved_dir:
                         logger.debug("导航超时快照: %s", snap.saved_dir)
@@ -3681,7 +3683,7 @@ class FirefoxBase(BasePage):
                     if snap and snap.saved_dir:
                         logger.debug("导航错误快照: %s", snap.saved_dir)
 
-            if wait != "none":
+            if wait != "none" and not _nav_timed_out:
                 self.wait_loading(timeout=nav_timeout)
 
         self._reinject_xpath_picker_if_needed()
