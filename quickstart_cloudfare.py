@@ -47,6 +47,9 @@ def print_full_cookies(page: FirefoxPage) -> None:
 
 
 opts = FirefoxOptions()
+# 某些环境带 --marionette 启动会闪退，示例里显式关闭，
+# 仅使用 BiDi Remote Agent 通道。
+opts.enable_marionette(False)
 # 如果 Firefox 不在默认安装目录，可以取消注释并指定路径。
 # opts.set_browser_path(r"D:\Firefox\firefox.exe")
 
@@ -100,10 +103,10 @@ try:
 
     print("\n" + "=" * 60)
     if passed:
-        print("✅ 成功通过 Cloudflare！")
+        print("SUCCESS: 成功通过 Cloudflare！")
         print_full_cookies(page)
     else:
-        print("❌ 超时未通过")
+        print("FAIL: 超时未通过")
 
     print("\n[+] 保持浏览器打开 500 秒...")
     page.wait(500)

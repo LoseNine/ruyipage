@@ -66,6 +66,10 @@ class FirefoxOptions(object):
         self._trace_enabled = False  # debug trace 记录
         self._failure_snapshot_enabled = False  # 失败自动诊断快照
         self._snapshot_dir = None  # 诊断快照保存目录
+        # 某些 Firefox / 指纹浏览器 / 个别机器环境在带 --marionette
+        # 启动时会直接崩溃或闪退，导致后续 BiDi 端口连接失败。
+        # 默认保持启用以兼容历史行为，但允许用户显式关闭。
+        self._marionette_enabled = True  # 是否启用 Marionette 启动通道
 
     # ===== 属性读取 =====
 
@@ -186,6 +190,11 @@ class FirefoxOptions(object):
     def snapshot_dir(self):
         """诊断快照保存目录。"""
         return self._snapshot_dir
+
+    @property
+    def marionette_enabled(self):
+        """是否启用 Marionette 启动通道。"""
+        return self._marionette_enabled
 
     # ===== 链式设置方法 =====
 
@@ -639,6 +648,25 @@ class FirefoxOptions(object):
         self._failure_snapshot_enabled = bool(on_off)
         return self
 
+    def enable_marionette(self, on_off=True):
+        """设置是否启用 Firefox Marionette 通道。
+
+        Args:
+            on_off: ``True`` 启用，``False`` 关闭。
+
+        Returns:
+            self
+
+        说明：
+            - 默认值为 ``True``，保持现有兼容行为。
+            - 若某些 Firefox / 指纹浏览器在带 ``--marionette`` 时崩溃，
+              可显式关闭：``FirefoxOptions().enable_marionette(False)``。
+            - 关闭后不会在启动命令里加入 ``--marionette``，也不会向
+              profile 写入 ``marionette.enabled=true``。
+        """
+        self._marionette_enabled = bool(on_off)
+        return self
+
     def set_snapshot_dir(self, path):
         """设置诊断快照的保存目录。
 
@@ -740,6 +768,7 @@ class FirefoxOptions(object):
         trace=False,
         failure_snapshot=False,
         snapshot_dir=None,
+        marionette=True,
     ):
         """小白友好的一键启动预设。
 
@@ -766,6 +795,7 @@ class FirefoxOptions(object):
             trace: 是否启用 debug trace 记录
             failure_snapshot: 是否启用失败自动诊断快照
             snapshot_dir: 诊断快照保存目录
+            marionette: 是否启用 Firefox Marionette 通道
 
         Returns:
             self
@@ -798,6 +828,7 @@ class FirefoxOptions(object):
         )
         self.enable_trace(trace)
         self.enable_failure_snapshot(failure_snapshot)
+        self.enable_marionette(marionette)
         if snapshot_dir:
             self.set_snapshot_dir(snapshot_dir)
         return self
@@ -812,7 +843,10 @@ class FirefoxOptions(object):
 
         cmd.append("--remote-debugging-port={}".format(self._port))
         cmd.append("--no-remote")
-        cmd.append("--marionette")
+        # Marionette 不是 BiDi 主链路必需项；若某些环境带该参数会闪退，
+        # 可通过 enable_marionette(False) 关闭，仅保留 remote-debugging-port。
+        if self._marionette_enabled:
+            cmd.append("--marionette")
 
         if self._profile_path:
             cmd.append("--profile")
@@ -851,8 +885,10 @@ class FirefoxOptions(object):
         prefs.setdefault("browser.startup.homepage_override.mstone", "ignore")
         prefs.setdefault("browser.tabs.warnOnClose", False)
         prefs.setdefault("browser.warnOnQuit", False)
-        # 启用 Marionette（特权 JS 通道，用于 about:config 运行时读写）
-        prefs.setdefault("marionette.enabled", True)
+        # 仅在显式启用时才写入该 pref，避免某些环境因 Marionette 启动异常
+        # 而在浏览器尚未建立 BiDi 连接前就崩溃/闪退。
+        if self._marionette_enabled:
+            prefs.setdefault("marionette.enabled", True)
 
         # 下载设置
         if self._download_path:
