@@ -5566,22 +5566,38 @@ class FirefoxBase(BasePage):
                                 checkbox_data[key] = val.get("value", False)
 
                 # 直接在 CF iframe 内部触发点击（绕过 closed shadow root）
+                max_x = max(1, int(size["w"]) - 1)
+                max_y = max(1, int(size["h"]) - 1)
+
                 if checkbox_data.get("found"):
-                    click_x = int(checkbox_data["x"])
-                    click_y = int(checkbox_data["y"])
+                    click_x = max(1, min(int(checkbox_data["x"]), max_x))
+                    click_y = max(1, min(int(checkbox_data["y"]), max_y))
                     logger.info(f"在 iframe 内部点击 checkbox: ({click_x}, {click_y})")
                 else:
                     # fallback: 点击 iframe 左侧（checkbox 通常在左边）
-                    click_x = 35
-                    click_y = size["h"] // 2
+                    click_x = min(35, max_x)
+                    click_y = max(1, min(size["h"] // 2, max_y))
                     logger.info(f"在 iframe 内部点击左侧: ({click_x}, {click_y})")
 
                 # 使用拟人轨迹点击（Bezier/弧线/超出回拉 + 悬停抖动 + 点击后漂移）
                 # 起始坐标限制在 iframe 范围内，避免坐标越界
                 import random as _rand
-                start_x = _rand.randint(max(1, click_x + 40), max(click_x + 60, size["w"] - 10))
-                start_y = _rand.randint(max(1, click_y - 15), max(click_y + 15, size["h"] - 5))
-                human_actions = build_human_click_actions(click_x, click_y, sx=start_x, sy=start_y)
+                start_min_x = min(max(1, click_x + 10), max_x)
+                start_max_x = max(start_min_x, min(max_x, click_x + 40))
+                start_min_y = max(1, min(click_y - 10, max_y))
+                start_max_y = max(start_min_y, min(max_y, click_y + 10))
+                start_x = _rand.randint(start_min_x, start_max_x)
+                start_y = _rand.randint(start_min_y, start_max_y)
+                human_actions = build_human_click_actions(
+                    click_x,
+                    click_y,
+                    sx=start_x,
+                    sy=start_y,
+                    min_x=1,
+                    max_x=max_x,
+                    min_y=1,
+                    max_y=max_y,
+                )
                 self._driver._browser_driver.run(
                     "input.performActions",
                     {

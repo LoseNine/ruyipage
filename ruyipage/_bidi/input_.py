@@ -334,7 +334,23 @@ def build_human_mouse_path(start, end):
     return _apply_jitter(raw, max_norm, max_tan) if random.random() < 0.75 else raw
 
 
-def build_human_click_actions(tx, ty, sx=None, sy=None):
+def _clamp_point(x, y, min_x=None, max_x=None, min_y=None, max_y=None):
+    """将坐标限制在给定边界内。"""
+    if min_x is not None:
+        x = max(min_x, x)
+    if max_x is not None:
+        x = min(max_x, x)
+    if min_y is not None:
+        y = max(min_y, y)
+    if max_y is not None:
+        y = min(max_y, y)
+    return x, y
+
+
+def build_human_click_actions(
+    tx, ty, sx=None, sy=None,
+    min_x=None, max_x=None, min_y=None, max_y=None,
+):
     """构建完整的拟人点击 BiDi actions（含轨迹+悬停抖动+点击+点击后移开）。
 
     Args:
@@ -342,6 +358,10 @@ def build_human_click_actions(tx, ty, sx=None, sy=None):
         ty: 目标 Y 坐标 (视口像素)。
         sx: 起始 X 坐标。为 None 时随机生成。默认 None。
         sy: 起始 Y 坐标。为 None 时随机生成。默认 None。
+        min_x: 允许的最小 X。默认 None。
+        max_x: 允许的最大 X。默认 None。
+        min_y: 允许的最小 Y。默认 None。
+        max_y: 允许的最大 Y。默认 None。
 
     Returns:
         list: BiDi actions 列表，可直接传入 input.performActions。
@@ -352,12 +372,15 @@ def build_human_click_actions(tx, ty, sx=None, sy=None):
     if sy is None:
         sy = random.randint(100, 600)
 
+    tx, ty = _clamp_point(tx, ty, min_x, max_x, min_y, max_y)
+    sx, sy = _clamp_point(sx, sy, min_x, max_x, min_y, max_y)
+
     path = build_human_mouse_path((sx, sy), (tx, ty))
     acts = [{'type': 'pointerMove', 'x': int(sx), 'y': int(sy), 'duration': 0}]
 
     prev_x, prev_y = sx, sy
     for px, py in path:
-        bx, by = int(px), int(py)
+        bx, by = _clamp_point(int(px), int(py), min_x, max_x, min_y, max_y)
         dist = math.hypot(bx - prev_x, by - prev_y)
         acts.append({'type': 'pointerMove', 'x': bx, 'y': by,
                      'duration': max(8, int(dist * random.uniform(1.5, 3.0)))})
@@ -365,8 +388,12 @@ def build_human_click_actions(tx, ty, sx=None, sy=None):
 
     # 悬停抖动
     for _ in range(random.randint(2, 4)):
+        hover_x, hover_y = _clamp_point(
+            tx + random.randint(-2, 2), ty + random.randint(-1, 1),
+            min_x, max_x, min_y, max_y,
+        )
         acts.append({'type': 'pointerMove',
-                     'x': tx + random.randint(-2, 2), 'y': ty + random.randint(-1, 1),
+                     'x': hover_x, 'y': hover_y,
                      'duration': random.randint(20, 50)})
     acts.append({'type': 'pointerMove', 'x': tx, 'y': ty, 'duration': random.randint(15, 30)})
     acts.append({'type': 'pause', 'duration': random.randint(80, 300)})
@@ -374,8 +401,12 @@ def build_human_click_actions(tx, ty, sx=None, sy=None):
     acts.append({'type': 'pause', 'duration': random.randint(80, 180)})
     acts.append({'type': 'pointerUp', 'button': 0})
     # 点击后自然移开
+    drift_x, drift_y = _clamp_point(
+        tx + random.randint(5, 20), ty + random.randint(-5, 5),
+        min_x, max_x, min_y, max_y,
+    )
     acts.append({'type': 'pointerMove',
-                 'x': tx + random.randint(5, 20), 'y': ty + random.randint(-5, 5),
+                 'x': drift_x, 'y': drift_y,
                  'duration': random.randint(80, 150)})
 
     return [{'type': 'pointer', 'id': 'mouse0',
