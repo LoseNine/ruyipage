@@ -27,6 +27,7 @@ import re
 import time
 import logging
 import threading
+import base64
 from queue import Queue, Empty
 
 from .._bidi import session as bidi_session
@@ -47,7 +48,8 @@ class DataPacket(object):
         status (int): 响应状态码，如 ``200``、``404``。请求失败时为 ``0``。
         headers (dict): 响应头字典 ``{name: value}``，key 已转小写。
         event_type (str): 事件类型，``"responseCompleted"`` 或 ``"fetchError"``。
-        body: 响应体（当前版本始终为 ``None``，需通过 DataCollector 获取）。
+        body: 响应体文本缓存。可通过 ``packet.text`` 或
+            ``packet.response_body`` 便捷读取。
         request (dict): BiDi 原始 request 对象。
         response (dict): BiDi 原始 response 对象。
         timestamp (float): 事件时间戳。
@@ -64,7 +66,7 @@ class DataPacket(object):
 
     def __init__(self, request=None, response=None, event_type='',
                  url='', method='', status=0, headers=None, body=None,
-                 timestamp=0):
+                 timestamp=0, response_collector=None):
         self.request = request or {}
         self.response = response or {}
         self.event_type = event_type
@@ -74,6 +76,69 @@ class DataPacket(object):
         self.headers = headers or {}
         self.body = body
         self.timestamp = timestamp
+        self._response_collector = response_collector
+
+    @property
+    def request_id(self):
+        """请求唯一 ID，用于关联 DataCollector 数据。"""
+        request_id = self.request.get('request')
+        return request_id if request_id else ''
+
+    def _decode_body_value(self, body):
+        if body is None:
+            return None
+        if isinstance(body, str):
+            return body
+        if not isinstance(body, dict):
+            return str(body)
+
+        body_type = body.get('type')
+        value = body.get('value')
+        if value is None:
+            return None
+        if body_type == 'string':
+            return str(value)
+        if body_type == 'base64':
+            try:
+                return base64.b64decode(value).decode('utf-8')
+            except Exception:
+                return str(value)
+        return str(value)
+
+    def get_response_body(self):
+        """读取响应体文本。
+
+        ``page.listen.start()`` 默认会创建响应 DataCollector，因此滚动、点击
+        等操作触发的请求在 ``responseCompleted`` 后可直接通过本方法读取。
+        对 204、跳转、失败请求、二进制资源或浏览器未采集到数据的请求，返回
+        ``None``。
+        """
+        if self.body is not None:
+            return self.body
+        if not self._response_collector or not self.request_id:
+            return None
+        try:
+            data = self._response_collector.get(self.request_id, data_type='response')
+        except Exception as e:
+            logger.debug('获取监听响应体失败: %s', e)
+            return None
+
+        decoded = self._decode_body_value(getattr(data, 'base64', None))
+        if decoded is None:
+            decoded = self._decode_body_value(getattr(data, 'bytes', None))
+        if decoded is not None:
+            self.body = decoded
+        return decoded
+
+    @property
+    def response_body(self):
+        """响应体文本，等价于 ``get_response_body()``。"""
+        return self.get_response_body()
+
+    @property
+    def text(self):
+        """响应体文本别名，便于 ``packet.text`` 直接打印。"""
+        return self.get_response_body()
 
     @property
     def is_failed(self):
@@ -152,6 +217,7 @@ class Listener(object):
         self._packets = []
         self._subscription_id = None
         self._subscribed_events = []
+        self._response_collector = None
 
     @property
     def listening(self):
@@ -183,7 +249,7 @@ class Listener(object):
         self._drain_queue()
         return self._packets[:]
 
-    def start(self, targets=True, is_regex=False, method=None):
+    def start(self, targets=True, is_regex=False, method=None, collect_response=True):
         """开始监听网络事件。
 
         Args:
@@ -215,6 +281,12 @@ class Listener(object):
 
                     page.listen.start('/api/', method='POST')
 
+            collect_response: 是否自动采集响应体。默认 ``True``。
+
+                启用后，``page.listen.wait()`` 返回的 ``DataPacket`` 可直接通过
+                ``packet.text`` / ``packet.response_body`` 读取响应文本，无需手动
+                创建 ``page.network.add_data_collector(...)``。
+
         Examples::
 
             # 最简单：监听所有请求
@@ -244,6 +316,17 @@ class Listener(object):
 
         self._caught = Queue()
         self._packets = []
+        self._response_collector = None
+
+        if collect_response:
+            try:
+                self._response_collector = self._owner.network.add_data_collector(
+                    ['responseCompleted'],
+                    data_types=['response'],
+                )
+            except Exception as e:
+                logger.debug('启动监听响应数据收集器失败: %s', e)
+                self._response_collector = None
 
         # 订阅网络事件
         events = [
@@ -303,6 +386,18 @@ class Listener(object):
         driver = self._owner._driver
         driver.remove_callback('network.responseCompleted')
         driver.remove_callback('network.fetchError')
+
+        if self._response_collector:
+            for packet in self.steps:
+                try:
+                    packet.get_response_body()
+                except Exception:
+                    pass
+            try:
+                self._response_collector.remove()
+            except Exception:
+                pass
+            self._response_collector = None
 
         logger.debug('停止监听网络事件')
 
@@ -427,6 +522,7 @@ class Listener(object):
             status=response.get('status', 0),
             headers=headers,
             timestamp=params.get('timestamp', 0),
+            response_collector=self._response_collector,
         )
 
         self._caught.put(packet)
