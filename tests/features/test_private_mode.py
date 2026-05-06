@@ -19,8 +19,13 @@ def test_private_mode_with_options(opts_factory, temp_user_dir):
 
 
 @pytest.mark.feature
-def test_private_mode_with_launch(temp_user_dir):
-    page = launch(headless=False, private=True, user_dir=temp_user_dir)
+def test_private_mode_with_launch(temp_user_dir, test_browser_path):
+    page = launch(
+        headless=False,
+        private=True,
+        user_dir=temp_user_dir,
+        browser_path=test_browser_path,
+    )
     try:
         assert page.url == "about:privatebrowsing"
         page.get("about:blank")
@@ -30,8 +35,13 @@ def test_private_mode_with_launch(temp_user_dir):
 
 
 @pytest.mark.feature
-def test_private_mode_starts_in_private_browsing_page(temp_user_dir):
-    page = launch(headless=False, private=True, user_dir=temp_user_dir)
+def test_private_mode_starts_in_private_browsing_page(temp_user_dir, test_browser_path):
+    page = launch(
+        headless=False,
+        private=True,
+        user_dir=temp_user_dir,
+        browser_path=test_browser_path,
+    )
     try:
         tree = page.browser.driver.run("browsingContext.getTree", {"maxDepth": 0})
         urls = [item.get("url", "") for item in tree.get("contexts", [])]

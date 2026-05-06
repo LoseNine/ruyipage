@@ -6,9 +6,9 @@
 
 [简体中文](./README.md) | [English](./README_EN.md)
 
-> Built for **AI analysis** and **data capture** workflows, with the ability to intercept arbitrary request and response packets.
+> Built for **AI analysis** and **data capture** workflows, with the ability to intercept arbitrary request and response packets. Ships with a battle-tested anti-detection Firefox fingerprint browser engine for Windows and Linux.
 >
-> 专用于 **AI 分析** 和 **数据采集** 场景，可拦截任意请求响应包。
+> 专用于 **AI 分析** 和 **数据采集** 场景，可拦截任意请求响应包。自带好用的过检测 Win/Linux 火狐指纹浏览器内核。
 
 > **A next-generation automation framework**
 >

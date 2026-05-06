@@ -206,7 +206,7 @@ class FirefoxOptions(object):
                 常见值：
                 Windows: ``r'C:\\Program Files\\Mozilla Firefox\\firefox.exe'``
                 macOS: ``'/Applications/Firefox.app/Contents/MacOS/firefox'``
-                Linux: ``'/usr/bin/firefox'``
+                Linux: ``'/usr/bin/firefox'`` or a directory containing ``firefox``
 
         Returns:
             self: 原配置对象，便于链式调用。
@@ -216,6 +216,10 @@ class FirefoxOptions(object):
             - 同时存在多个 Firefox 版本，想指定其中一个
             - 便携版 Firefox 需要显式指定 exe 路径
         """
+        path = os.path.expanduser(str(path))
+        if os.path.isdir(path):
+            exe_name = "firefox.exe" if sys.platform == "win32" else "firefox"
+            path = os.path.join(path, exe_name)
         self._browser_path = path
         return self
 

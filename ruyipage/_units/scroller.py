@@ -132,7 +132,7 @@ class PageScroller(object):
             ele = ele_or_loc
 
         if ele:
-            if ele.states.is_in_viewport:
+            if ele.states.is_in_viewport and not center:
                 return self._owner
 
             step_y = 500

@@ -32,6 +32,8 @@ DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS = (
     "firefox.exe",
     "flowerbrowser.exe",
     "adsbrowser.exe",
+    "firefox",
+    "firefox-bin",
 )
 
 DEFAULT_FIREFOX_COMMANDLINE_PATTERNS = (
@@ -258,6 +260,81 @@ def find_existing_browsers(
     return result
 
 
+def _discover_pids_and_ports_linux(process_name_patterns, commandline_patterns):
+    """Linux: 通过 /proc 发现匹配的 Firefox 进程及其监听端口。"""
+    pids = set()
+    ports = set()
+
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open("/proc/{}/comm".format(pid), "r") as f:
+                comm = f.read().strip().lower()
+        except (OSError, PermissionError):
+            continue
+        try:
+            with open("/proc/{}/cmdline".format(pid), "rb") as f:
+                cmdline = f.read().decode(errors="replace").replace("\x00", " ").lower()
+        except (OSError, PermissionError):
+            cmdline = ""
+
+        name_ok = any(p in comm for p in process_name_patterns)
+        cmd_ok = any(p in cmdline for p in commandline_patterns)
+        if name_ok or cmd_ok:
+            pids.add(pid)
+
+    if not pids:
+        return pids, ports
+
+    LOCAL_ADDRS_V4 = {"0100007F", "00000000"}
+    LOCAL_ADDRS_V6 = {
+        "00000000000000000000000000000000",
+        "00000000000000000000000001000000",
+    }
+    inode_to_port = {}
+
+    for tcp_file, local_addrs in [
+        ("/proc/net/tcp", LOCAL_ADDRS_V4),
+        ("/proc/net/tcp6", LOCAL_ADDRS_V6),
+    ]:
+        try:
+            with open(tcp_file, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 10 or parts[3] != "0A":
+                        continue
+                    ip_hex, port_hex = parts[1].rsplit(":", 1)
+                    if ip_hex in local_addrs:
+                        port = int(port_hex, 16)
+                        inode = parts[9]
+                        if inode != "0":
+                            inode_to_port[inode] = port
+        except (OSError, PermissionError):
+            continue
+
+    if not inode_to_port:
+        return pids, ports
+
+    for pid in pids:
+        fd_dir = "/proc/{}/fd".format(pid)
+        try:
+            for fd_name in os.listdir(fd_dir):
+                try:
+                    link = os.readlink(os.path.join(fd_dir, fd_name))
+                except (OSError, PermissionError):
+                    continue
+                if link.startswith("socket:[") and link.endswith("]"):
+                    inode = link[8:-1]
+                    if inode in inode_to_port:
+                        ports.add(inode_to_port[inode])
+        except (OSError, PermissionError):
+            continue
+
+    return pids, ports
+
+
 def find_existing_browsers_by_process(
     host="127.0.0.1",
     timeout=0.5,
@@ -336,6 +413,13 @@ def find_existing_browsers_by_process(
                         ports.add(port)
             except Exception as e:
                 logger.debug("进程扫描失败: %s", e)
+    else:
+        try:
+            pids, ports = _discover_pids_and_ports_linux(
+                process_name_patterns, commandline_patterns
+            )
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
     if not ports:
         return []
@@ -439,6 +523,13 @@ def find_candidate_ports_by_process(
                         ports.add(port)
             except Exception as e:
                 logger.debug("进程扫描失败: %s", e)
+    else:
+        try:
+            _, ports = _discover_pids_and_ports_linux(
+                process_name_patterns, commandline_patterns
+            )
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
     return sorted(ports)
 
@@ -1005,6 +1096,53 @@ class Firefox(object):
             "启动后无法连接到 {}，请检查 Firefox 是否正常启动".format(self._address)
         )
 
+    def _kill_firefox_by_port(self, port):
+        """通过 /proc 找到监听指定端口的进程并终止，避免误杀无关 Firefox。"""
+        import signal
+
+        target_port_hex = format(port, "X").upper()
+        target_inode = None
+
+        for tcp_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(tcp_file, "r") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) < 10 or parts[3] != "0A":
+                            continue
+                        _, port_hex = parts[1].rsplit(":", 1)
+                        if port_hex.upper() == target_port_hex:
+                            target_inode = parts[9]
+                            break
+            except (OSError, PermissionError):
+                continue
+            if target_inode:
+                break
+
+        if not target_inode:
+            return
+
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            fd_dir = "/proc/{}/fd".format(entry)
+            try:
+                for fd_name in os.listdir(fd_dir):
+                    try:
+                        link = os.readlink(os.path.join(fd_dir, fd_name))
+                    except (OSError, PermissionError):
+                        continue
+                    if link == "socket:[{}]".format(target_inode):
+                        pid = int(entry)
+                        logger.debug("找到端口 %d 的 Firefox 进程 PID=%d，正在终止", port, pid)
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        return
+            except (OSError, PermissionError):
+                continue
+
     def _restart_firefox_for_stuck_session(self):
         """重启 Firefox 以清理孤儿 BiDi session"""
         host, port_str = self._address.rsplit(":", 1)
@@ -1025,7 +1163,7 @@ class Firefox(object):
             elif sys.platform == "win32":
                 os.system("taskkill /f /im firefox.exe >nul 2>&1")
             else:
-                os.system("pkill -f firefox")
+                self._kill_firefox_by_port(self._options.port)
         except Exception:
             pass
 

@@ -25,7 +25,9 @@ if sys.platform == "win32":
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ruyipage import FirefoxPage, InterceptedRequest
 

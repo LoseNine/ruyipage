@@ -27,6 +27,12 @@ def pytest_configure(config):
 
 
 @pytest.fixture
+def test_browser_path():
+    """Return the Firefox executable path configured for browser tests."""
+    return os.environ.get(ENV_FIREFOX_PATH) or None
+
+
+@pytest.fixture
 def opts_factory():
     """返回一个可定制的 FirefoxOptions 工厂。"""
 
