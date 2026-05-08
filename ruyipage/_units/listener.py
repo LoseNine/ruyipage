@@ -66,7 +66,7 @@ class DataPacket(object):
 
     def __init__(self, request=None, response=None, event_type='',
                  url='', method='', status=0, headers=None, body=None,
-                 timestamp=0, response_collector=None):
+                 timestamp=0, response_collector=None, owner=None):
         self.request = request or {}
         self.response = response or {}
         self.event_type = event_type
@@ -77,6 +77,7 @@ class DataPacket(object):
         self.body = body
         self.timestamp = timestamp
         self._response_collector = response_collector
+        self._owner = owner
 
     @property
     def request_id(self):
@@ -100,9 +101,16 @@ class DataPacket(object):
             return str(value)
         if body_type == 'base64':
             try:
-                return base64.b64decode(value).decode('utf-8')
+                raw_bytes = base64.b64decode(value)
             except Exception:
-                return str(value)
+                logger.debug('base64 解码失败，返回 None')
+                return None
+            # Firefox BiDi 返回的是已解压数据（浏览器 HTTP 层已处理
+            # Content-Encoding: br/gzip/deflate），这里只需文本解码。
+            try:
+                return raw_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                return raw_bytes.decode('utf-8', errors='replace')
         return str(value)
 
     def get_response_body(self):
@@ -110,25 +118,45 @@ class DataPacket(object):
 
         ``page.listen.start()`` 默认会创建响应 DataCollector，因此滚动、点击
         等操作触发的请求在 ``responseCompleted`` 后可直接通过本方法读取。
-        对 204、跳转、失败请求、二进制资源或浏览器未采集到数据的请求，返回
-        ``None``。
+
+        当 Firefox BiDi DataCollector 未能采集到数据时（已知 Firefox 147 对
+        ``Content-Encoding: br`` 响应存在此问题），会自动对 GET 请求使用页面
+        内 ``fetch()`` 重放读取作为降级方案。
+
+        对 204、跳转、失败请求、二进制资源或降级也失败的请求，返回 ``None``。
         """
         if self.body is not None:
             return self.body
-        if not self._response_collector or not self.request_id:
-            return None
-        try:
-            data = self._response_collector.get(self.request_id, data_type='response')
-        except Exception as e:
-            logger.debug('获取监听响应体失败: %s', e)
-            return None
 
-        decoded = self._decode_body_value(getattr(data, 'base64', None))
-        if decoded is None:
-            decoded = self._decode_body_value(getattr(data, 'bytes', None))
-        if decoded is not None:
-            self.body = decoded
-        return decoded
+        # 1. 优先从 DataCollector 读取
+        if self._response_collector and self.request_id:
+            try:
+                data = self._response_collector.get(self.request_id, data_type='response')
+                decoded = self._decode_body_value(getattr(data, 'base64', None))
+                if decoded is None:
+                    decoded = self._decode_body_value(getattr(data, 'bytes', None))
+                if decoded is not None:
+                    self.body = decoded
+                    return decoded
+            except Exception as e:
+                logger.debug('获取监听响应体失败: %s', e)
+
+        # 2. DataCollector 未采集到数据时，对 GET 请求用 JS fetch 降级
+        if self._owner and self.method == 'GET' and self.url:
+            try:
+                result = self._owner.run_js(
+                    'return fetch(arguments[0], {credentials: "include"})'
+                    '.then(r => r.text())',
+                    self.url,
+                    timeout=15,
+                )
+                if result and isinstance(result, str):
+                    self.body = result
+                    return result
+            except Exception as e:
+                logger.debug('JS fetch 降级读取失败: %s', e)
+
+        return None
 
     @property
     def response_body(self):
@@ -523,6 +551,7 @@ class Listener(object):
             headers=headers,
             timestamp=params.get('timestamp', 0),
             response_collector=self._response_collector,
+            owner=self._owner,
         )
 
         self._caught.put(packet)

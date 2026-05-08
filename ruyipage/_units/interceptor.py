@@ -413,9 +413,16 @@ class InterceptedRequest(object):
 
         if body_type == "base64":
             try:
-                return base64.b64decode(value).decode("utf-8")
+                raw_bytes = base64.b64decode(value)
             except Exception:
-                return str(value)
+                logger.debug("base64 解码失败，返回 None")
+                return None
+            # Firefox BiDi 返回的是已解压数据（浏览器 HTTP 层已处理
+            # Content-Encoding: br/gzip/deflate），这里只需文本解码。
+            try:
+                return raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw_bytes.decode("utf-8", errors="replace")
 
         return str(value)
 
@@ -548,7 +555,7 @@ class InterceptedRequest(object):
             Settings.response_body_timeout = 20
         """
         if not self._response_collector or not self.request_id:
-            return None
+            return self._fallback_fetch_body()
         if timeout is None:
             timeout = Settings.response_body_timeout
 
@@ -579,6 +586,29 @@ class InterceptedRequest(object):
 
         if last_error is not None:
             logger.debug("get_response_body 超时，最后异常: %s", last_error)
+
+        # DataCollector 未采集到数据时（Firefox 147 对 Content-Encoding: br
+        # 响应存在此问题），对 GET 请求用 JS fetch 降级。
+        return self._fallback_fetch_body()
+
+    def _fallback_fetch_body(self) -> Optional[str]:
+        """当 DataCollector 拿不到数据时，对 GET 请求用页面 fetch 重放读取。"""
+        if self._method != "GET" or not self._url:
+            return None
+        page = getattr(self._interceptor, '_owner', None) if self._interceptor else None
+        if not page:
+            return None
+        try:
+            result = page.run_js(
+                'return fetch(arguments[0], {credentials: "include"})'
+                '.then(r => r.text())',
+                self._url,
+                timeout=15,
+            )
+            if result and isinstance(result, str):
+                return result
+        except Exception as e:
+            logger.debug("JS fetch 降级读取失败: %s", e)
         return None
 
     # ------------------------------------------------------------------
