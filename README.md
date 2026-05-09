@@ -458,6 +458,46 @@ page.actions.human_click(ele, algorithm="windmouse").perform()
 - 拖拽轨迹
 - JS click 的可视化反馈
 
+### 多进程 / 跨脚本连接已有浏览器
+
+如果你的 Firefox 已经由 `ruyiPage` 启动（或其他方式以
+``--remote-debugging-port`` 参数在后台运行），另一个 Python 进程
+可以通过 `attach()` 直接连上去，**不会启动新浏览器**。
+
+**用法**：
+
+```python
+from ruyipage import attach
+
+# 连接到本机 127.0.0.1:9222 上正在运行的 Firefox
+page = attach("127.0.0.1:9222")
+
+print(page.title)
+print(page.url)
+```
+
+**典型场景**：
+
+- 主进程启动 Firefox 并保持运行
+- 其他进程 / 脚本通过 `attach()` 连上去，复用同一个浏览器实例
+- 多个进程可以**同时 attach 到同一端口**，各拥有独立的 BiDi 会话
+
+**等价写法（直接使用 `FirefoxOptions`）**：
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+opts = FirefoxOptions().set_address(addr).existing_only(True)
+page = FirefoxPage(opts)
+```
+
+**注意**：
+直接传地址字符串 `FirefoxPage('127.0.0.1:9222')` **会尝试启动新浏览器**，
+而不是连接已有的。如果你要连接已有实例，请使用 `attach()` 或
+显式设置 `existing_only(True)`。
+
+---
+
 ### 接管已打开的浏览器
 
 如果 Firefox 已经是你手动打开的，或者是指纹浏览器先打开的，也可以直接接管现有实例。

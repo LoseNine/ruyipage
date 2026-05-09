@@ -458,6 +458,49 @@ That example uses a dedicated local mouse-only demo page and showcases:
 - Drag trails
 - Visual feedback for JS click
 
+### Multi-Process / Cross-Script Browser Connection
+
+If you already have Firefox running (started by `ruyiPage` or any other
+method with the ``--remote-debugging-port`` flag), another Python process
+can attach to it via `attach()` — **no new browser will be launched**.
+
+**Usage**:
+
+```python
+from ruyipage import attach
+
+# Connect to Firefox running on 127.0.0.1:9222
+page = attach("127.0.0.1:9222")
+
+print(page.title)
+print(page.url)
+```
+
+**Typical scenarios**:
+
+- A main process starts Firefox and keeps it alive
+- Other processes / scripts connect via `attach()` to reuse the same
+  browser instance
+- Multiple processes can **attach to the same port concurrently**, each
+  with its own independent BiDi session
+
+**Equivalent explicit form (using `FirefoxOptions`)**:
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+opts = FirefoxOptions().set_address(addr).existing_only(True)
+page = FirefoxPage(opts)
+```
+
+**Note**:
+Passing a raw address string such as `FirefoxPage('127.0.0.1:9222')`
+**will attempt to launch a new browser**, not attach to an existing one.
+Use `attach()` or explicitly set `existing_only(True)` when you want to
+connect to an already-running instance.
+
+---
+
 ### Attach to an Already-Open Browser
 
 If Firefox is already open manually, or a fingerprint browser is started first, `ruyiPage` can attach to the existing instance directly.
