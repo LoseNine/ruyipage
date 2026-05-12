@@ -233,8 +233,12 @@ class TestGreenletBridge:
         import asyncio
         from ruyipage._async.greenlet_bridge import await_
 
-        with pytest.raises(RuntimeError, match="greenlet_spawn"):
-            await_(asyncio.sleep(0))
+        coro = asyncio.sleep(0)
+        try:
+            with pytest.raises(RuntimeError, match="greenlet_spawn"):
+                await_(coro)
+        finally:
+            coro.close()
 
     @pytest.mark.asyncio
     async def test_in_async_greenlet_detection(self):

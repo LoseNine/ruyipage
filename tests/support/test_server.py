@@ -14,6 +14,8 @@ from ruyipage._functions.tools import find_free_port
 class TestServer(object):
     """用于 tests/ 的轻量本地 HTTP server。"""
 
+    __test__ = False
+
     def __init__(self, host="127.0.0.1", port=None):
         self.host = host
         self.port = port or find_free_port(9400, 9800)

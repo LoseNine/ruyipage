@@ -356,9 +356,11 @@ class Listener(object):
                 logger.debug('启动监听响应数据收集器失败: %s', e)
                 self._response_collector = None
 
-        # 订阅网络事件
+        # Listener only yields completed/failed packets.  Avoid subscribing to
+        # network.beforeRequestSent here: high-traffic pages can flood the BiDi
+        # event stream with request-start events that this class never consumes,
+        # delaying unrelated commands such as script.evaluate.
         events = [
-            'network.beforeRequestSent',
             'network.responseCompleted',
             'network.fetchError',
         ]

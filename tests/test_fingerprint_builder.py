@@ -471,7 +471,8 @@ def test_apply_smart_fingerprint_full_pipeline(tmp_path):
 
     # fpfile actually written and contains httpauth
     assert os.path.isfile(ctx.fpfile_path)
-    text = open(ctx.fpfile_path, encoding="utf-8").read()
+    with open(ctx.fpfile_path, encoding="utf-8") as f:
+        text = f.read()
     assert "httpauth.username:u" in text
     assert "httpauth.password:p" in text
     assert "local_webrtc_ipv6:2001:db8::abcd" in text

@@ -35,9 +35,27 @@ SEARCH_URL = (
 TARGET_PREFIX = "https://www.google.com/search?vet="
 
 
-def print_packet(packet, label):
+def is_target_packet(packet):
+    if not packet:
+        return False
+    if packet.is_failed:
+        return False
+    if packet.method and packet.method.upper() != "GET":
+        return False
+    if packet.status and int(packet.status) != 200:
+        return False
+    return bool(packet.url and packet.url.startswith(TARGET_PREFIX))
+
+
+def print_packet(packet, label, read_body=False):
     print(f"[{label}] status={packet.status} method={packet.method}")
     print(f"[{label}] url={packet.url}")
+    if not read_body:
+        return False
+
+    # Reading packet.text may call network.getData, and can fall back to a page
+    # fetch for GET responses.  Do it only after the URL/status/method filter
+    # confirms this is the Google Images pagination packet we actually need.
     text = packet.text
     if text:
         print(f"[{label}] text preview (first 1200 chars):")
@@ -66,7 +84,7 @@ def main() -> None:
         print("[2] 尝试读取初始命中包...")
         first = page.listen.wait(timeout=8)
         if first:
-            print_packet(first, "initial")
+            print_packet(first, "initial", read_body=is_target_packet(first))
         else:
             print("[initial] no packet captured yet")
 
@@ -81,7 +99,12 @@ def main() -> None:
                 print(f"[scroll-{i + 1}] no packet captured")
                 continue
 
-            if print_packet(packet, f"scroll-{i + 1}"):
+            if not is_target_packet(packet):
+                print_packet(packet, f"scroll-{i + 1}", read_body=False)
+                print(f"[scroll-{i + 1}] skip non-target packet")
+                continue
+
+            if print_packet(packet, f"scroll-{i + 1}", read_body=True):
                 hit = packet
                 break
 

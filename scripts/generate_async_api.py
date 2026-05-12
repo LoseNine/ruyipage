@@ -22,10 +22,16 @@ import os
 import inspect
 import textwrap
 import datetime
+import difflib
+import re
 
 # 确保项目根目录在 sys.path 中
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+
+GENERATED_FILE = os.path.join(PROJECT_ROOT, "ruyipage", "_async", "_generated.py")
+_GENERATED_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+_GENERATED_AT_PLACEHOLDER = "<generated-at>"
 
 
 # ── 分类规则 ──────────────────────────────────────────────────────────────
@@ -44,7 +50,7 @@ UNIT_PROPERTIES = {
     "set", "local_storage", "session_storage", "console", "intercept",
     "network", "window", "browser_tools", "contexts", "emulation",
     "extensions", "downloads", "events", "navigation", "prefs",
-    "realms", "config",
+    "realms", "config", "trace",
 }
 
 # 需要 I/O 的属性 → 生成 async get_xxx() 方法
@@ -420,8 +426,8 @@ class AsyncNoneElement:
 '''
 
 
-def main():
-    """主函数：生成 _async/_generated.py"""
+def generate_source(generated_at=None):
+    """Return the generated _async/_generated.py source without writing it."""
     # 导入同步类
     from ruyipage._pages.firefox_base import FirefoxBase
     from ruyipage._pages.firefox_page import FirefoxPage
@@ -429,7 +435,8 @@ def main():
     from ruyipage._pages.firefox_frame import FirefoxFrame
     from ruyipage._elements.firefox_element import FirefoxElement
 
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if generated_at is None:
+        generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     header = '''# -*- coding: utf-8 -*-
 # ┌──────────────────────────────────────────────────────────────────┐
@@ -442,7 +449,7 @@ def main():
 from .greenlet_bridge import greenlet_spawn
 from ._overrides import AsyncFirefoxBaseMixin, AsyncFirefoxElementMixin
 
-'''.format(now=now)
+'''.format(now=generated_at)
 
     parts = [header]
 
@@ -578,10 +585,46 @@ from ._overrides import AsyncFirefoxBaseMixin, AsyncFirefoxElementMixin
     )
 
     # 写入文件
-    output = "\n".join(parts)
-    output_path = os.path.join(
-        PROJECT_ROOT, "ruyipage", "_async", "_generated.py"
+    return "\n".join(parts)
+
+
+def normalize_generated_source(source):
+    """Normalize generated source for drift checks that should ignore timestamps."""
+    return _GENERATED_AT_RE.sub(_GENERATED_AT_PLACEHOLDER, source)
+
+
+def assert_generated_file_current(output_path=GENERATED_FILE):
+    """Assert _generated.py matches the current generator output, ignoring timestamp."""
+    with open(output_path, "r", encoding="utf-8") as f:
+        current = f.read()
+
+    expected = generate_source(generated_at=_GENERATED_AT_PLACEHOLDER)
+    current_normalized = normalize_generated_source(current)
+    expected_normalized = normalize_generated_source(expected)
+
+    if current_normalized == expected_normalized:
+        return
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            current_normalized.splitlines(),
+            expected_normalized.splitlines(),
+            fromfile=output_path,
+            tofile="scripts/generate_async_api.py dry-run",
+            lineterm="",
+        )
     )
+    raise AssertionError(
+        "{} is out of date. Run `python scripts/generate_async_api.py`.\n{}".format(
+            output_path, diff
+        )
+    )
+
+
+def main():
+    """Generate _async/_generated.py."""
+    output = generate_source()
+    output_path = GENERATED_FILE
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(output)
 
