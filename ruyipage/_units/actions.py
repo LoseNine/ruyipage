@@ -562,6 +562,10 @@ class Actions(object):
                 except Exception as e:
                     logger.debug("预滚动元素到视口失败: %s", e)
 
+        min_x, max_x, min_y, max_y = self._get_viewport_bounds()
+        start_x, start_y = self._clamp_point(start_x, start_y, min_x, max_x, min_y, max_y)
+        target_x, target_y = self._clamp_point(target_x, target_y, min_x, max_x, min_y, max_y)
+
         algorithm = self._resolve_human_algorithm(algorithm)
         path = self._build_human_move_path(
             (start_x, start_y),
@@ -572,6 +576,7 @@ class Actions(object):
 
         # 执行移动
         for px, py in path:
+            px, py = self._clamp_point(px, py, min_x, max_x, min_y, max_y)
             self._pointer_actions.append(
                 {
                     "type": "pointerMove",
@@ -583,16 +588,25 @@ class Actions(object):
 
         # 悬停微调
         for _ in range(random.randint(2, 4)):
+            hover_x, hover_y = self._clamp_point(
+                target_x + random.randint(-2, 2),
+                target_y + random.randint(-1, 1),
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+            )
             self._pointer_actions.append(
                 {
                     "type": "pointerMove",
-                    "x": int(target_x + random.randint(-2, 2)),
-                    "y": int(target_y + random.randint(-1, 1)),
+                    "x": int(hover_x),
+                    "y": int(hover_y),
                     "duration": random.randint(20, 50),
                 }
             )
 
         # 精确落点
+        target_x, target_y = self._clamp_point(target_x, target_y, min_x, max_x, min_y, max_y)
         self._pointer_actions.append(
             {
                 "type": "pointerMove",
@@ -834,6 +848,19 @@ class Actions(object):
         if value not in ("bezier", "windmouse"):
             raise ValueError('human algorithm 必须是 "bezier" 或 "windmouse"')
         return value
+
+    def _get_viewport_bounds(self):
+        """返回当前 context 的有效 viewport 边界。"""
+        width, height = self._owner.rect.viewport_size
+        width = max(1, int(width or 0))
+        height = max(1, int(height or 0))
+        return 0, width - 1, 0, height - 1
+
+    def _clamp_point(self, x, y, min_x, max_x, min_y, max_y):
+        """将坐标限制在当前 viewport 内。"""
+        x = min(max(float(x), min_x), max_x)
+        y = min(max(float(y), min_y), max_y)
+        return x, y
 
     def human_type(self, text, min_delay=0.045, max_delay=0.24):
         """拟人化输入文本。
