@@ -316,6 +316,9 @@ page.quit()
 
 # Option 2: use launch() directly
 page = launch(private=True)
+
+# Quick launch with a proxy
+page = launch(proxy="http://127.0.0.1:7890")
 page.get("https://www.example.com")
 page.quit()
 ```

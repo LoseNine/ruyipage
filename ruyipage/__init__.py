@@ -200,6 +200,7 @@ def launch(
     port=9222,
     browser_path=None,
     user_dir=None,
+    proxy=None,
     close_on_exit=True,
     window_size=(1280, 800),
     timeout_base=10,
@@ -221,6 +222,8 @@ def launch(
             适用于 Firefox 安装在非默认目录时。
         user_dir: 用户目录 / profile 目录。
             适用于希望复用登录态、Cookie、扩展时。
+        proxy: 代理地址，例如 ``"http://127.0.0.1:7890"`` 或
+            ``"socks5://127.0.0.1:1080"``。
         close_on_exit: Python 程序退出时是否自动关闭浏览器。
             默认 ``True``。仅对 ruyipage 自己启动的浏览器生效；
             attach 已有浏览器时只断开连接，不主动关闭外部进程。
@@ -246,6 +249,7 @@ def launch(
         private=private,
         xpath_picker=xpath_picker,
         action_visual=action_visual,
+        proxy=proxy,
         close_on_exit=close_on_exit,
         window_size=window_size,
         timeout_base=timeout_base,
@@ -257,8 +261,6 @@ def launch(
     )
     if browser_path:
         opts.set_browser_path(browser_path)
-    if user_dir:
-        opts.set_user_dir(user_dir)
     return FirefoxPage(opts)
 
 

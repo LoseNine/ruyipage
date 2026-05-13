@@ -759,6 +759,7 @@ class FirefoxOptions(object):
         *,
         browser_path=None,
         user_dir=None,
+        proxy=None,
         close_on_exit=True,
         private=False,
         headless=False,
@@ -784,6 +785,9 @@ class FirefoxOptions(object):
                 适用于 Firefox 安装在非默认目录时。
             user_dir: 用户目录 / profile 目录。
                 适用于希望复用登录态、Cookie、扩展时。
+            proxy: 代理地址。
+                例如 ``"http://127.0.0.1:7890"`` 或
+                ``"socks5://127.0.0.1:1080"``。
             close_on_exit: Python 程序退出时是否自动关闭浏览器。
                 默认 ``True``，适合脚本跑完自动收尾。
             private: 是否启用 Firefox 私密浏览模式。
@@ -817,6 +821,8 @@ class FirefoxOptions(object):
             self.set_browser_path(browser_path)
         if user_dir:
             self.set_user_dir(user_dir)
+        if proxy:
+            self.set_proxy(proxy)
         self.close_on_exit(close_on_exit)
         self.private_mode(private)
         self.headless(headless)

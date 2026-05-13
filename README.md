@@ -316,6 +316,9 @@ page.quit()
 
 # 方式二：直接用 launch()
 page = launch(private=True)
+
+# 带代理快速启动
+page = launch(proxy="http://127.0.0.1:7890")
 page.get("https://www.example.com")
 page.quit()
 ```
