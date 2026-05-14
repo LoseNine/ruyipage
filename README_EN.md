@@ -87,8 +87,12 @@ The images below show real scenarios. To keep the GitHub homepage more compact, 
     <td align="center"><b>bet365 real-world demo</b><br><img src="images/bet365.png" width="320" alt="bet365 Demo" /></td>
   </tr>
   <tr>
+    <td align="center"><b>reCAPTCHA score 0.9 demo</b><br><img src="images/recaptcha.png" width="320" alt="reCAPTCHA score 0.9" /></td>
     <td align="center"><b>Fingerprint browser scan page</b><br><img src="images/fingerprint.png" width="320" alt="Fingerprint Browser Demo" /></td>
+  </tr>
+  <tr>
     <td align="center"><b>Firefox-route real-world capability</b><br>Better suited for high-risk pages, login flows, challenges, and realistic interaction scenarios</td>
+    <td></td>
   </tr>
 </table>
 

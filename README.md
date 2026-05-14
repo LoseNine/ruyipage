@@ -87,8 +87,12 @@
     <td align="center"><b>bet365 实战展示</b><br><img src="images/bet365.png" width="320" alt="bet365 Demo" /></td>
   </tr>
   <tr>
+    <td align="center"><b>reCAPTCHA 评分 0.9 展示</b><br><img src="images/recaptcha.png" width="320" alt="reCAPTCHA score 0.9" /></td>
     <td align="center"><b>指纹浏览器指纹页展示</b><br><img src="images/fingerprint.png" width="320" alt="Fingerprint Browser Demo" /></td>
+  </tr>
+  <tr>
     <td align="center"><b>Firefox 路线真实场景能力</b><br>更适合高风控页面、登录流、验证码与真实交互场景</td>
+    <td></td>
   </tr>
 </table>
 
