@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Human Move Visual Grid</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+
+    body {
+      min-height: 2200px;
+      background:
+        radial-gradient(circle at top left, rgba(59, 130, 246, 0.16), transparent 30%),
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.14), transparent 28%),
+        linear-gradient(180deg, #0f172a 0%, #111827 100%);
+    }
+
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.82);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+      font: 13px/1.5 monospace;
+      max-width: 360px;
+    }
+
+    #board {
+      position: relative;
+      width: 1480px;
+      height: 1960px;
+      margin: 0 auto;
+    }
+
+    .target {
+      position: absolute;
+      width: 164px;
+      height: 58px;
+      border: 0;
+      border-radius: 14px;
+      color: #f8fafc;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.36);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .target:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 28px rgba(15, 23, 42, 0.42);
+    }
+
+    .target.hit {
+      outline: 3px solid rgba(250, 204, 21, 0.96);
+      outline-offset: 3px;
+    }
+
+    #target-1  { left: 90px;   top: 120px;  background: #2563eb; }
+    #target-2  { left: 420px;  top: 180px;  background: #059669; }
+    #target-3  { left: 770px;  top: 130px;  background: #7c3aed; }
+    #target-4  { left: 1120px; top: 210px;  background: #db2777; }
+    #target-5  { left: 180px;  top: 560px;  background: #ea580c; }
+    #target-6  { left: 610px;  top: 690px;  background: #0891b2; }
+    #target-7  { left: 1040px; top: 610px;  background: #16a34a; }
+    #target-8  { left: 260px;  top: 1040px; background: #4f46e5; }
+    #target-9  { left: 740px;  top: 1110px; background: #dc2626; }
+    #target-10 { left: 1140px; top: 1010px; background: #0f766e; }
+    #target-11 { left: 150px;  top: 1530px; background: #9333ea; }
+    #target-12 { left: 920px;  top: 1620px; background: #2563eb; }
+  </style>
+</head>
+<body>
+  <div id="hud">ready</div>
+  <div id="board">
+    <button id="target-1" class="target" type="button">Target 1</button>
+    <button id="target-2" class="target" type="button">Target 2</button>
+    <button id="target-3" class="target" type="button">Target 3</button>
+    <button id="target-4" class="target" type="button">Target 4</button>
+    <button id="target-5" class="target" type="button">Target 5</button>
+    <button id="target-6" class="target" type="button">Target 6</button>
+    <button id="target-7" class="target" type="button">Target 7</button>
+    <button id="target-8" class="target" type="button">Target 8</button>
+    <button id="target-9" class="target" type="button">Target 9</button>
+    <button id="target-10" class="target" type="button">Target 10</button>
+    <button id="target-11" class="target" type="button">Target 11</button>
+    <button id="target-12" class="target" type="button">Target 12</button>
+  </div>
+  <script>
+    window.__clicks = [];
+    window.__lastClick = null;
+    window.__hitTargets = [];
+
+    window.__resetClicks = function () {
+      window.__clicks = [];
+      window.__lastClick = null;
+      window.__hitTargets = [];
+      document.getElementById('hud').textContent = 'ready';
+      document.querySelectorAll('.target.hit').forEach(function (el) {
+        el.classList.remove('hit');
+      });
+    };
+
+    document.addEventListener('click', function (e) {
+      var rec = {
+        x: e.clientX,
+        y: e.clientY,
+        target: e.target.id || e.target.tagName,
+        trusted: e.isTrusted,
+      };
+      window.__clicks.push(rec);
+      window.__lastClick = rec;
+      if (e.target.classList && e.target.classList.contains('target')) {
+        if (window.__hitTargets.indexOf(e.target.id) === -1) {
+          window.__hitTargets.push(e.target.id);
+        }
+        e.target.classList.add('hit');
+        document.getElementById('hud').textContent = 'hit ' + window.__hitTargets.length + '/12 :: ' + e.target.id + ' @ (' + rec.x + ',' + rec.y + ')';
+      }
+    });
+  </script>
+</body>
+</html>

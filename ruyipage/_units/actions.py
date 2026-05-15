@@ -548,17 +548,20 @@ class Actions(object):
         Returns:
             self: 支持链式调用。
         """
-        target_x, target_y = self._resolve_position(ele_or_loc)
         start_x, start_y = self.curr_x, self.curr_y
+        is_element = hasattr(ele_or_loc, "states") and hasattr(ele_or_loc, "_get_center")
+
+        target_x, target_y = self._resolve_position(ele_or_loc)
 
         # 自动滚动到可见
-        if hasattr(ele_or_loc, "states") and hasattr(
-            ele_or_loc.states, "is_whole_in_viewport"
-        ):
+        if hasattr(ele_or_loc, "states") and hasattr(ele_or_loc.states, "is_whole_in_viewport"):
             if not ele_or_loc.states.is_whole_in_viewport:
                 try:
                     self._owner.scroll.to_see(ele_or_loc, center=True)
                     _sleep(random.uniform(0.1, 0.2))
+                    # 滚动后重新取一次元素中心，避免继续使用滚动前的旧视口坐标。
+                    if is_element:
+                        target_x, target_y = self._resolve_position(ele_or_loc)
                 except Exception as e:
                     logger.debug("预滚动元素到视口失败: %s", e)
 

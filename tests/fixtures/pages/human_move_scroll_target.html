@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Human Move Scroll Target</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      min-height: 2200px;
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+    }
+
+    #status {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 10;
+      padding: 4px 8px;
+      background: rgba(15, 23, 42, 0.78);
+      color: #fff;
+      border-radius: 4px;
+      font: 12px/1.4 monospace;
+    }
+
+    #target {
+      position: absolute;
+      left: 1240px;
+      top: 1560px;
+      width: 180px;
+      height: 56px;
+      border: 0;
+      border-radius: 10px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">ready</div>
+  <button id="target" type="button">publish</button>
+  <script>
+    window.__clicks = [];
+    window.__lastClick = null;
+    window.__hitTarget = false;
+
+    window.__resetClicks = function () {
+      window.__clicks = [];
+      window.__lastClick = null;
+      window.__hitTarget = false;
+      document.getElementById('status').textContent = 'ready';
+    };
+
+    document.addEventListener('click', function (e) {
+      var rec = {
+        x: e.clientX,
+        y: e.clientY,
+        target: e.target.id || e.target.tagName,
+        trusted: e.isTrusted,
+      };
+      window.__clicks.push(rec);
+      window.__lastClick = rec;
+      if (e.target.id === 'target') {
+        window.__hitTarget = true;
+        document.getElementById('status').textContent = 'clicked';
+      }
+    });
+  </script>
+</body>
+</html>
