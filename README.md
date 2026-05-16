@@ -33,9 +33,9 @@
       </a>
     </td>
     <td>
-      <sub>GitHub Sponsor 风格推荐</sub><br>
+      <sub>赞助商</sub><br>
       <a href="https://xjbtoken.site/"><b>XJBToken</b></a><br>
-      看这里：左边是 <b>XJB</b> 三个字的 AI 图，右边是介绍。了解 XJBToken 项目、AI Token 相关说明和更多信息，请访问 <a href="https://xjbtoken.site/">https://xjbtoken.site/</a>。
+      低价实惠的 AI Token 中转站，包含 GPT 5.4 / 5.5 全系列，以及 Claude Opus 4.6 / 4.7 的 Kiro 和 Max 渠道，包纯度，实用耐蹬，如意自用：<a href="https://xjbtoken.site/">https://xjbtoken.site/</a>。
     </td>
   </tr>
 </table>

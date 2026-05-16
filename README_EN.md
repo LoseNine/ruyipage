@@ -33,9 +33,9 @@
       </a>
     </td>
     <td>
-      <sub>GitHub Sponsor-style feature</sub><br>
+      <sub>Sponsor</sub><br>
       <a href="https://xjbtoken.site/"><b>XJBToken</b></a><br>
-      Look here: the left side is an AI-style image with the three letters <b>XJB</b>, and the right side is the introduction. Learn more about XJBToken, AI Token notes, and related information at <a href="https://xjbtoken.site/">https://xjbtoken.site/</a>.
+      A low-cost and practical AI Token relay station, covering the full GPT 5.4 / 5.5 series and Claude Opus 4.6 / 4.7 Kiro and Max routes. Designed for clean, stable, and durable everyday use, and used by Ruyi itself: <a href="https://xjbtoken.site/">https://xjbtoken.site/</a>.
     </td>
   </tr>
 </table>
