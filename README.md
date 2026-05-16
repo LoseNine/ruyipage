@@ -25,6 +25,21 @@
 [![GitHub stars](https://img.shields.io/github/stars/LoseNine/ruyipage?style=social)](https://github.com/LoseNine/ruyipage/stargazers)
 [![Downloads](https://static.pepy.tech/badge/ruyipage)](https://pepy.tech/project/ruyipage)
 
+<table>
+  <tr>
+    <td width="180" align="center">
+      <a href="https://xjbtoken.site/">
+        <img src="images/xjbtoken.svg" width="160" alt="XJB AI" />
+      </a>
+    </td>
+    <td>
+      <sub>GitHub Sponsor 风格推荐</sub><br>
+      <a href="https://xjbtoken.site/"><b>XJBToken</b></a><br>
+      看这里：左边是 <b>XJB</b> 三个字的 AI 图，右边是介绍。了解 XJBToken 项目、AI Token 相关说明和更多信息，请访问 <a href="https://xjbtoken.site/">https://xjbtoken.site/</a>。
+    </td>
+  </tr>
+</table>
+
 ## 请我喝咖啡
 
 如果这个项目对你有帮助，欢迎请我喝杯咖啡，支持我继续完善 `ruyiPage`。
