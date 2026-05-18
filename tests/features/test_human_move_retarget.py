@@ -16,7 +16,7 @@ class _DummyElement(object):
         self._calls = 0
         self.states = _DummyStates(in_viewport=in_viewport)
 
-    def _get_center(self):
+    def _get_center(self, scroll=True):
         idx = min(self._calls, len(self._centers) - 1)
         self._calls += 1
         x, y = self._centers[idx]

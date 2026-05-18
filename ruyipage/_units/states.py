@@ -108,6 +108,15 @@ class ElementStates(object):
         }''') or False
 
     @property
+    def is_whole_in_viewport(self):
+        """元素是否完全在视口内"""
+        return self._ele._call_js_on_self('''(el) => {
+            const r = el.getBoundingClientRect();
+            return r.top >= 0 && r.bottom <= window.innerHeight
+                && r.left >= 0 && r.right <= window.innerWidth;
+        }''') or False
+
+    @property
     def has_rect(self):
         """元素是否有可视区域"""
         size = self._ele.size

@@ -551,7 +551,7 @@ class Actions(object):
         start_x, start_y = self.curr_x, self.curr_y
         is_element = hasattr(ele_or_loc, "states") and hasattr(ele_or_loc, "_get_center")
 
-        target_x, target_y = self._resolve_position(ele_or_loc)
+        target_x, target_y = self._resolve_position(ele_or_loc, scroll=False)
 
         # 自动滚动到可见
         if hasattr(ele_or_loc, "states") and hasattr(ele_or_loc.states, "is_whole_in_viewport"):
@@ -561,7 +561,7 @@ class Actions(object):
                     _sleep(random.uniform(0.1, 0.2))
                     # 滚动后重新取一次元素中心，避免继续使用滚动前的旧视口坐标。
                     if is_element:
-                        target_x, target_y = self._resolve_position(ele_or_loc)
+                        target_x, target_y = self._resolve_position(ele_or_loc, scroll=False)
                 except Exception as e:
                     logger.debug("预滚动元素到视口失败: %s", e)
 
@@ -894,11 +894,12 @@ class Actions(object):
     #  内部辅助方法
     # ════════════════════════════════════════════════════════════════
 
-    def _resolve_position(self, ele_or_loc):
+    def _resolve_position(self, ele_or_loc, scroll=True):
         """解析目标位置为 (x, y) 坐标。
 
         Args:
             ele_or_loc: 元素、坐标 dict、坐标 tuple/list、或 None。
+            scroll: 获取元素坐标时是否先滚动到可见区域。默认 True。
 
         Returns:
             tuple: (x, y) 坐标元组。
@@ -913,9 +914,14 @@ class Actions(object):
             return ele_or_loc[0], ele_or_loc[1]
 
         # 假定是元素对象
-        pos = getattr(ele_or_loc, "_get_center", lambda: None)()
-        if pos:
-            return pos.get("x", 0), pos.get("y", 0)
+        get_center = getattr(ele_or_loc, "_get_center", None)
+        if get_center:
+            try:
+                pos = get_center(scroll=scroll)
+            except TypeError:
+                pos = get_center()
+            if pos:
+                return pos.get("x", 0), pos.get("y", 0)
 
         return self.curr_x, self.curr_y
 

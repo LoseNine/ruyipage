@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scroll Then Click Target</title>
+  <style>
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      min-height: 4000px;
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      color: #e2e8f0;
+    }
+
+    #hud {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 100;
+      padding: 8px 14px;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.9);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      font: 13px/1.6 monospace;
+    }
+
+    .btn-row {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 20px;
+    }
+
+    .btn-row.top { top: 100px; }
+    .btn-row.middle { top: 2000px; }
+    .btn-row.bottom { top: 3600px; }
+
+    .target-btn {
+      width: 160px;
+      height: 50px;
+      border: 0;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #btn-top-1 { background: #2563eb; }
+    #btn-top-2 { background: #7c3aed; }
+    #btn-mid-1 { background: #059669; }
+    #btn-mid-2 { background: #ea580c; }
+    #btn-bot-1 { background: #dc2626; }
+    #btn-bot-2 { background: #0891b2; }
+
+    .pixel-target {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: #facc15;
+      border: 2px solid #fef08a;
+    }
+
+    #pixel-1 { left: 200px; top: 300px; }
+    #pixel-2 { left: 800px; top: 500px; }
+    #pixel-3 { left: 400px; top: 2500px; }
+    #pixel-4 { left: 1000px; top: 3200px; }
+  </style>
+</head>
+<body>
+  <div id="hud">ready</div>
+
+  <div class="btn-row top">
+    <button id="btn-top-1" class="target-btn" type="button">Top Left</button>
+    <button id="btn-top-2" class="target-btn" type="button">Top Right</button>
+  </div>
+
+  <div class="btn-row middle">
+    <button id="btn-mid-1" class="target-btn" type="button">Middle Left</button>
+    <button id="btn-mid-2" class="target-btn" type="button">Middle Right</button>
+  </div>
+
+  <div class="btn-row bottom">
+    <button id="btn-bot-1" class="target-btn" type="button">Bottom Left</button>
+    <button id="btn-bot-2" class="target-btn" type="button">Bottom Right</button>
+  </div>
+
+  <div id="pixel-1" class="pixel-target"></div>
+  <div id="pixel-2" class="pixel-target"></div>
+  <div id="pixel-3" class="pixel-target"></div>
+  <div id="pixel-4" class="pixel-target"></div>
+
+  <script>
+    window.__clicks = [];
+    window.__lastClick = null;
+    window.__hitIds = [];
+
+    window.__resetClicks = function () {
+      window.__clicks = [];
+      window.__lastClick = null;
+      window.__hitIds = [];
+      document.getElementById('hud').textContent = 'ready';
+    };
+
+    document.addEventListener('click', function (e) {
+      var rec = {
+        x: e.clientX,
+        y: e.clientY,
+        pageX: e.pageX,
+        pageY: e.pageY,
+        target: e.target.id || e.target.tagName,
+        trusted: e.isTrusted,
+        scrollY: Math.round(window.scrollY)
+      };
+      window.__clicks.push(rec);
+      window.__lastClick = rec;
+      if (e.target.id) {
+        if (window.__hitIds.indexOf(e.target.id) === -1) {
+          window.__hitIds.push(e.target.id);
+        }
+      }
+      document.getElementById('hud').textContent =
+        'click: ' + (e.target.id || '?') + ' @ (' + rec.x + ',' + rec.y + ') scrollY=' + rec.scrollY;
+    });
+  </script>
+</body>
+</html>

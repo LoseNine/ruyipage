@@ -1352,14 +1352,25 @@ class FirefoxElement(BaseElement):
             logger.debug("_call_js_on_self 失败: %s", e)
             return None
 
-    def _get_center(self):
-        """获取元素中心坐标（先滚动到可见区域）"""
-        return self._run_safe("""(el) => {
-            el.scrollIntoView({block: "center", inline: "nearest"});
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 && r.height === 0) return null;
-            return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
-        }""")
+    def _get_center(self, scroll=True):
+        """获取元素中心坐标
+
+        Args:
+            scroll: 是否先滚动到可见区域。False 时仅读取当前坐标。
+        """
+        if scroll:
+            return self._run_safe("""(el) => {
+                el.scrollIntoView({block: "center", inline: "nearest", behavior: "instant"});
+                const r = el.getBoundingClientRect();
+                if (r.width === 0 && r.height === 0) return null;
+                return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+            }""")
+        else:
+            return self._run_safe("""(el) => {
+                const r = el.getBoundingClientRect();
+                if (r.width === 0 && r.height === 0) return null;
+                return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+            }""")
 
     def _make_shared_ref(self):
         """创建 SharedReference"""
