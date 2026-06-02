@@ -44,7 +44,7 @@ class FirefoxOptions(object):
         self._arguments = []
         self._preferences = {}
         self._headless = False
-        self._download_path = "."
+        self._download_path = None
         self._load_mode = "normal"  # 'normal', 'eager', 'none'
         self._timeouts = {
             "base": 10,
@@ -401,7 +401,9 @@ class FirefoxOptions(object):
         Returns:
             self
         """
-        self._download_path = os.path.abspath(path)
+        self._download_path = os.path.normpath(
+            os.path.abspath(os.path.expanduser(os.fspath(path)))
+        )
         return self
 
     def set_load_mode(self, mode):

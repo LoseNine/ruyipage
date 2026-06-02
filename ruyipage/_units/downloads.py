@@ -129,8 +129,8 @@ class DownloadsManager(object):
                 单位：文件系统路径字符串。
                 常见值：绝对路径如 ``'E:/ruyipage/examples/downloads'``。
                 当 ``behavior='allow'`` 时通常与 ``path`` 配合使用。
-            contexts: 受影响的顶层 browsingContext ID 列表。
-                常见值：``[page.tab_id]``。传 ``None`` 时默认作用于当前页面。
+            contexts: 旧参数。当前 Firefox BiDi 下载策略不支持按 tab context
+                设置目录，请省略或改用 ``user_contexts``。
             user_contexts: 受影响的 user context ID 列表。
                 常见值：Firefox 容器标签页 ID 列表。与 ``contexts`` 互斥。
 
@@ -139,15 +139,9 @@ class DownloadsManager(object):
 
         适用场景：
             - 示例中切换 allow / deny 策略
-            - 测试特定 tab 的下载隔离行为
+            - 测试默认浏览器或 user context 的下载隔离行为
             - 统一替代散落的旧式下载路径设置代码
         """
-        if contexts is not None and user_contexts is not None:
-            raise ValueError("contexts 与 user_contexts 不能同时设置")
-
-        if contexts is None and user_contexts is None:
-            contexts = [self._owner._context_id]
-
         return bidi_browser.set_download_behavior(
             self._owner._driver._browser_driver,
             behavior=behavior,

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """BiDi browser 模块命令"""
 
+import os
+
 
 def close(driver):
     """关闭浏览器"""
@@ -106,7 +108,7 @@ def set_client_window_state(
 def set_download_behavior(
     driver, behavior="allow", download_path=None, contexts=None, user_contexts=None
 ):
-    """设置下载行为（Firefox 私有扩展，非 W3C 标准）。
+    """设置下载行为。
 
     Args:
         behavior: 下载策略字符串。
@@ -116,8 +118,8 @@ def set_download_behavior(
             单位：文件系统路径字符串。
             常见值：绝对路径，例如 ``'E:/ruyipage/examples/downloads'``。
             当 ``behavior='allow'`` 时通常配合使用。
-        contexts: 受影响的 browsingContext ID 列表。
-            常见值：``[page.tab_id]``。与 ``user_contexts`` 互斥。
+        contexts: 旧参数。当前 ``browser.setDownloadBehavior`` 不支持按
+            browsingContext 设置下载目录，请省略或改用 ``user_contexts``。
         user_contexts: 受影响的 user context ID 列表。
             常见值：Firefox 容器标签页 ID 列表。与 ``contexts`` 互斥。
 
@@ -126,23 +128,29 @@ def set_download_behavior(
 
     适用场景：
         - 示例中切换 allow / deny 下载策略
-        - 针对特定 tab 或 user context 施加下载策略
+        - 针对默认浏览器行为或特定 user context 施加下载策略
     """
-    if contexts is not None and user_contexts is not None:
-        raise ValueError("contexts 与 user_contexts 不能同时设置")
+    if contexts is not None:
+        raise ValueError(
+            "browser.setDownloadBehavior 不支持 contexts，请省略或使用 user_contexts"
+        )
 
     params = {}
 
-    # 构建downloadBehavior对象
-    # type字段必须是 'allowed' 或 'denied'
-    behavior_type = "allowed" if behavior in ["allow", "allowAndOpen"] else "denied"
-    download_behavior = {"type": behavior_type, "behavior": behavior}
-    if download_path:
-        download_behavior["downloadPath"] = download_path
+    behavior_text = str(behavior or "").strip()
+    if behavior_text in ("allow", "allowAndOpen", "allowed"):
+        download_behavior = {"type": "allowed"}
+        if download_path:
+            download_behavior["destinationFolder"] = os.path.normpath(
+                os.path.abspath(os.path.expanduser(os.fspath(download_path)))
+            )
+    elif behavior_text in ("deny", "denied"):
+        download_behavior = {"type": "denied"}
+    else:
+        raise ValueError("behavior 必须是 'allow'、'allowAndOpen' 或 'deny'")
+
     params["downloadBehavior"] = download_behavior
 
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
     if user_contexts:
         params["userContexts"] = (
             user_contexts if isinstance(user_contexts, list) else [user_contexts]

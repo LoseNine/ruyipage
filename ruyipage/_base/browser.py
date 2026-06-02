@@ -20,6 +20,7 @@ from .driver import BrowserBiDiDriver, ContextDriver
 from .._adapter.remote_agent import get_bidi_ws_url
 from .._functions.sleep import sleep as _sleep
 from .._configs.firefox_options import FirefoxOptions
+from .._bidi import browser_module as bidi_browser
 from .._bidi import network as bidi_network
 from .._bidi import session as bidi_session
 from .._bidi import browsing_context as bidi_context
@@ -1664,12 +1665,10 @@ class Firefox(object):
 
         download_path = os.path.abspath(download_path)
         try:
-            self._driver.run(
-                "browser.setDownloadBehavior",
-                {
-                    "behavior": "allow",
-                    "downloadPath": download_path,
-                },
+            bidi_browser.set_download_behavior(
+                self._driver,
+                behavior="allow",
+                download_path=download_path,
             )
             logger.debug("下载路径已设置: %s", download_path)
         except Exception as e:

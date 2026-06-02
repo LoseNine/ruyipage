@@ -6,7 +6,7 @@ import json
 import time as _time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
 from ruyipage._functions.tools import find_free_port
 
@@ -152,6 +152,80 @@ class TestServer(object):
                         200,
                         {"status": "ok", "auth": True, "user": "user"},
                         headers=self._cors_headers(),
+                    )
+                    return
+
+                if path == "/download/text":
+                    query = parse_qs(parsed.query)
+                    filename = query.get("name", ["test.txt"])[0]
+                    content = query.get("content", ["hello download"])[0]
+                    self._write_text(
+                        200,
+                        content,
+                        headers=[
+                            (
+                                "Content-Disposition",
+                                'attachment; filename="{}"'.format(filename),
+                            ),
+                            ("Cache-Control", "no-store"),
+                        ],
+                    )
+                    return
+
+                if path == "/download/multiple":
+                    files = [
+                        ("ruyipage-multi-1.txt", "multi file content 1"),
+                        ("ruyipage-multi-2.txt", "multi file content 2"),
+                        ("ruyipage-multi-3.txt", "multi file content 3"),
+                    ]
+                    links = []
+                    for index, (filename, content) in enumerate(files, 1):
+                        href = "/download/text?" + urlencode(
+                            {"name": filename, "content": content}
+                        )
+                        links.append(
+                            '<li class="download-item" data-filename="{filename}">'
+                            '<span class="title">{filename}</span>'
+                            '<a id="download-{index}" class="download-link" '
+                            'href="{href}">Download</a>'
+                            "</li>".format(
+                                filename=filename,
+                                index=index,
+                                href=href,
+                            )
+                        )
+
+                    body = """<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><title>Multiple Downloads</title></head>
+<body>
+<h1>Multiple Downloads</h1>
+<ul id="downloads">
+{links}
+</ul>
+</body>
+</html>""".format(links="\n".join(links))
+                    body_bytes = body.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body_bytes)))
+                    self.end_headers()
+                    self.wfile.write(body_bytes)
+                    return
+
+                if path == "/download/json":
+                    query = parse_qs(parsed.query)
+                    filename = query.get("name", ["test.json"])[0]
+                    self._write_json(
+                        200,
+                        {"ok": True},
+                        headers=[
+                            (
+                                "Content-Disposition",
+                                'attachment; filename="{}"'.format(filename),
+                            ),
+                            ("Cache-Control", "no-store"),
+                        ],
                     )
                     return
 
