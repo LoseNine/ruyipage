@@ -269,12 +269,6 @@ class FirefoxBase(BasePage):
             'pointer-events:none;z-index:2147483645;';
         document.documentElement.appendChild(canvas);
     }
-    function resizeCanvas() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    }
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
     var ctx = canvas.getContext('2d');
 
     // --- 轨迹状态 ---
@@ -285,7 +279,54 @@ class FirefoxBase(BasePage):
     var moveQueue = [];
     var moveRaf = 0;
 
+    function syncCanvasSize() {
+        var width = window.innerWidth;
+        var height = window.innerHeight;
+        if (canvas.width === width && canvas.height === height) {
+            return false;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        return true;
+    }
+
+    function clearMotionState() {
+        trail = [];
+        moveQueue = [];
+        if (moveRaf) {
+            window.cancelAnimationFrame(moveRaf);
+            moveRaf = 0;
+        }
+        if (fadeTimer) {
+            clearInterval(fadeTimer);
+            fadeTimer = null;
+        }
+        fadeOpacity = 1.0;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        dot.style.display = 'none';
+        coord.style.display = 'none';
+    }
+
+    function resizeCanvas() {
+        syncCanvasSize();
+        clearMotionState();
+    }
+
+    function clearMotionStateIfResized() {
+        if (!syncCanvasSize()) {
+            return false;
+        }
+        clearMotionState();
+        return true;
+    }
+
+    syncCanvasSize();
+    window.addEventListener('resize', resizeCanvas);
+
     function drawTrail() {
+        if (clearMotionStateIfResized()) {
+            return;
+        }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if (trail.length < 2) return;
         var len = trail.length;
@@ -337,6 +378,9 @@ class FirefoxBase(BasePage):
     // points: [[x,y], [x,y], ...]
     function pumpMoves() {
         moveRaf = 0;
+        if (clearMotionStateIfResized()) {
+            return;
+        }
         if (!moveQueue.length) {
             startFadeOut();
             return;
@@ -359,6 +403,7 @@ class FirefoxBase(BasePage):
 
     function renderMoves(points) {
         if (!points || !points.length) return;
+        clearMotionStateIfResized();
         for (var i = 0; i < points.length; i++) {
             moveQueue.push(points[i]);
         }
@@ -369,6 +414,7 @@ class FirefoxBase(BasePage):
 
     // === API: 渲染点击动画 ===
     function renderClick(x, y, button) {
+        clearMotionStateIfResized();
         var color = button === 2 ? '255,60,60' : button === 1 ? '60,60,255' : '60,200,60';
         moveDot(x, y);
 

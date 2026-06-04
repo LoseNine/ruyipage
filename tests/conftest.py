@@ -26,6 +26,7 @@ BROWSER_TEST_DIRS = {
 
 BROWSER_TEST_FILES = {
     "tests/async_smoke/test_async_smoke.py",
+    "tests/features/test_action_visual_resize.py",
     "tests/features/test_actions.py",
     "tests/features/test_attach_mode.py",
     "tests/features/test_cookies.py",
