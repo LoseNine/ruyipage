@@ -101,7 +101,7 @@ TAB_LIST_RETURNING = {"new_container_tabs", "get_tabs"}
 
 # 返回 Frame 的方法
 FRAME_RETURNING = {"get_frame"}
-FRAME_LIST_RETURNING = {"get_frames"}
+FRAME_LIST_RETURNING = {"get_all_frames", "get_frames"}
 
 # 跳过的方法（由 _overrides.py 手写提供）
 SKIP_METHODS = {"with_frame", "with_shadow", "__call__", "__repr__", "__str__"}

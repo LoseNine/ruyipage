@@ -5563,6 +5563,33 @@ class FirefoxBase(BasePage):
 
         return [FirefoxFrame(self._browser, c["context"], self) for c in children]
 
+    def get_all_frames(self) -> "list[FirefoxFrame]":
+        """递归获取当前 browsing context 下的所有 iframe/frame。
+
+        Returns:
+            list[FirefoxFrame]: 按深度优先顺序返回所有后代 frame。
+        """
+        from .._pages.firefox_frame import FirefoxFrame
+
+        result = bidi_context.get_tree(
+            self._driver._browser_driver, root=self._context_id
+        )
+        contexts = result.get("contexts", [])
+        children = contexts[0].get("children", []) if contexts else []
+        frames = []
+
+        def collect(nodes, parent):
+            for node in nodes:
+                context_id = node.get("context")
+                if not context_id:
+                    continue
+                frame = FirefoxFrame(self._browser, context_id, parent)
+                frames.append(frame)
+                collect(node.get("children") or [], frame)
+
+        collect(children, self)
+        return frames
+
     @contextmanager
     def with_frame(self, locator=None, index=None, context_id=None):
         """使用 with 语法访问 iframe（更简洁）。

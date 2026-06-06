@@ -3,7 +3,7 @@
 # │ WARNING: 此文件由 scripts/generate_async_api.py 自动生成          │
 # │ 请勿手动编辑！修改后请重新运行生成器：                               │
 # │   python scripts/generate_async_api.py                          │
-# │ 生成时间: 2026-06-06 03:21:21                                        │
+# │ 生成时间: 2026-06-06 20:43:09                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
 from .greenlet_bridge import greenlet_spawn
@@ -337,6 +337,10 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
 
     async def get(self, url, wait=None, timeout=None):
         return await self._run_serialized_navigation('get', url, wait=wait, timeout=timeout)
+
+    async def get_all_frames(self):
+        _r = await greenlet_spawn(self._sync.get_all_frames, )
+        return [AsyncFirefoxFrame(f) for f in _r]
 
     async def get_cookies(self, all_info=False):
         _r = await greenlet_spawn(self._sync.get_cookies, all_info=all_info)
