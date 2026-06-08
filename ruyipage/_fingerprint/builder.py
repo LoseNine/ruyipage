@@ -1114,6 +1114,7 @@ _RESERVED_KEYS: Tuple[str, ...] = (
     "webgl.max_texture_image_units", "webgl.max_vertex_attribs",
     "webgl.aliased_point_size_max", "webgl.max_viewport_dim",
     "width", "height", "canvas",
+    "httpauth.host", "httpauth.port",
     "httpauth.username", "httpauth.password",
 )
 
@@ -1251,6 +1252,9 @@ def write_fpfile(
             a("socksauth.username:" + proxy_user)
             a("socksauth.password:" + proxy_pwd)
     elif proxy_user and proxy_pwd:
+        if proxy_host and proxy_port:
+            a("httpauth.host:" + str(proxy_host))
+            a("httpauth.port:" + str(int(proxy_port)))
         a("httpauth.username:" + proxy_user)
         a("httpauth.password:" + proxy_pwd)
 

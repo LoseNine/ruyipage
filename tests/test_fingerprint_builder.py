@@ -495,6 +495,8 @@ def test_write_fpfile_no_ipv6_no_auth(tmp_path):
     assert "local_webrtc_ipv6" not in actual_keys
     assert "public_webrtc_ipv6" not in actual_keys
     # httpauth keys must not appear
+    assert "httpauth.host" not in actual_keys
+    assert "httpauth.port" not in actual_keys
     assert "httpauth.username" not in actual_keys
     assert "httpauth.password" not in actual_keys
 
@@ -637,6 +639,8 @@ def test_apply_smart_fingerprint_full_pipeline(tmp_path):
     assert os.path.isfile(ctx.fpfile_path)
     with open(ctx.fpfile_path, encoding="utf-8") as f:
         text = f.read()
+    assert "httpauth.host:proxy.example.com" in text
+    assert "httpauth.port:8080" in text
     assert "httpauth.username:u" in text
     assert "httpauth.password:p" in text
     assert "local_webrtc_ipv6:2001:db8::abcd" in text

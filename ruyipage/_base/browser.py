@@ -1320,6 +1320,9 @@ class Firefox(object):
         if not self._options.proxy:
             return
 
+        if getattr(self._options, "uses_fpfile_http_proxy", False):
+            return
+
         credentials = self._options._get_proxy_auth_credentials()
         if not credentials:
             return

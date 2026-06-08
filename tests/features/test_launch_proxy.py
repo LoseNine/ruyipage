@@ -125,6 +125,123 @@ def test_write_prefs_uses_socksauth_fields_from_fpfile(tmp_path):
     assert "password-value" not in content
 
 
+def test_write_prefs_uses_httpauth_host_port_from_fpfile(tmp_path):
+    fpfile = tmp_path / "fp.txt"
+    fpfile.write_text(
+        "\n".join(
+            [
+                "httpauth.host:proxy.example.com",
+                "httpauth.port:8080",
+                "httpauth.username:username-value",
+                "httpauth.password:password-value",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = FirefoxOptions()
+    opts.quick_start(user_dir=str(tmp_path), fpfile=str(fpfile))
+
+    opts.write_prefs_to_profile()
+
+    content = (tmp_path / "user.js").read_text(encoding="utf-8")
+    assert 'user_pref("network.proxy.type", 1);' in content
+    assert 'user_pref("network.proxy.http", "proxy.example.com");' in content
+    assert 'user_pref("network.proxy.http_port", 8080);' in content
+    assert 'user_pref("network.proxy.ssl", "proxy.example.com");' in content
+    assert 'user_pref("network.proxy.ssl_port", 8080);' in content
+    assert 'user_pref("network.captive-portal-service.enabled", false);' in content
+    assert 'user_pref("network.connectivity-service.enabled", false);' in content
+    assert 'user_pref("signon.autologin.proxy", true);' in content
+    assert 'user_pref("network.auth.subresource-http-auth-allow", 2);' in content
+    assert "username-value" not in content
+    assert "password-value" not in content
+
+
+def test_write_prefs_strips_http_proxy_credentials_from_set_proxy(tmp_path):
+    opts = FirefoxOptions()
+    opts.quick_start(
+        user_dir=str(tmp_path),
+        proxy="http://username-value:password-value@proxy.example.com:8080",
+    )
+
+    opts.write_prefs_to_profile()
+
+    content = (tmp_path / "user.js").read_text(encoding="utf-8")
+    assert 'user_pref("network.proxy.http", "proxy.example.com");' in content
+    assert 'user_pref("network.proxy.http_port", 8080);' in content
+    assert 'user_pref("network.proxy.ssl", "proxy.example.com");' in content
+    assert 'user_pref("network.proxy.ssl_port", 8080);' in content
+    assert "username-value" not in content
+    assert "password-value" not in content
+
+
+def test_prepare_runtime_files_removes_httpauth_host_port_from_browser_fpfile(tmp_path):
+    source_fpfile = tmp_path / "source-fp.txt"
+    source_fpfile.write_text(
+        "\n".join(
+            [
+                "webdriver:0",
+                "httpauth.host:proxy.example.com",
+                "httpauth.port:8080",
+                "httpauth.username:username-value",
+                "httpauth.password:password-value",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = FirefoxOptions()
+    opts.quick_start(user_dir=str(tmp_path), fpfile=str(source_fpfile))
+
+    opts.prepare_runtime_files()
+
+    assert opts.fpfile != str(source_fpfile)
+    assert opts.uses_fpfile_http_proxy is True
+    content = (tmp_path / "ruyipage_runtime_fp.txt").read_text(encoding="utf-8")
+    assert "webdriver:0" in content
+    assert "httpauth.host" not in content
+    assert "httpauth.port" not in content
+    assert "httpauth.username:username-value" in content
+    assert "httpauth.password:password-value" in content
+
+    opts.write_prefs_to_profile()
+
+    user_js = (tmp_path / "user.js").read_text(encoding="utf-8")
+    assert 'user_pref("network.proxy.http", "proxy.example.com");' in user_js
+    assert 'user_pref("network.proxy.http_port", 8080);' in user_js
+    assert 'user_pref("network.captive-portal-service.enabled", false);' in user_js
+    assert 'user_pref("network.connectivity-service.enabled", false);' in user_js
+    assert "username-value" not in user_js
+    assert "password-value" not in user_js
+
+
+def test_proxy_auth_credentials_ignore_httpauth_host_port(tmp_path):
+    fpfile = tmp_path / "fp.txt"
+    fpfile.write_text(
+        "\n".join(
+            [
+                "httpauth.host=proxy.example.com",
+                "httpauth.port=8080",
+                "httpauth.username=username-value",
+                "httpauth.password=password-value",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = FirefoxOptions()
+    opts.quick_start(user_dir=str(tmp_path), fpfile=str(fpfile))
+
+    assert opts._get_proxy_auth_credentials() == {
+        "username": "username-value",
+        "password": "password-value",
+    }
+
+
 def test_proxy_auth_credentials_read_socksauth_fields_from_fpfile(tmp_path):
     fpfile = tmp_path / "fp.txt"
     fpfile.write_text(

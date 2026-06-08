@@ -63,6 +63,7 @@ class FirefoxOptions(object):
         self._runtime_fpfile = None  # 运行期生成的 session fpfile 路径
         self._per_tab_proxies = []  # 规范化后的 proxy.rotate.proxy 列表
         self._per_tab_proxy_exhausted = "wrap"  # proxy.rotate.exhausted
+        self._fpfile_http_proxy_enabled = False  # httpauth.host/port 生成的 HTTP 代理
         self._private_mode = False  # Firefox 私密浏览模式
         self._user_prompt_handler = None  # session.UserPromptHandler
         self._xpath_picker_enabled = False  # 页面 XPath 选择浮窗
@@ -142,6 +143,10 @@ class FirefoxOptions(object):
     @property
     def proxy(self):
         return self._proxy
+
+    @property
+    def uses_fpfile_http_proxy(self):
+        return bool(self._fpfile_http_proxy_enabled)
 
     @property
     def auto_port(self):
@@ -513,6 +518,7 @@ class FirefoxOptions(object):
         self._source_fpfile = path
         self._fpfile = path
         self._runtime_fpfile = None
+        self._fpfile_http_proxy_enabled = False
         return self
 
     def set_per_tab_proxies(self, proxies, exhausted="wrap"):
@@ -556,15 +562,20 @@ class FirefoxOptions(object):
 
     def prepare_runtime_files(self):
         """在 profile 就绪后生成运行期 session fpfile。"""
-        if not self._per_tab_proxies:
+        has_http_proxy = self._source_fpfile_has_http_proxy_fields()
+        self._fpfile_http_proxy_enabled = bool(has_http_proxy)
+        if not self._per_tab_proxies and not has_http_proxy:
             return
 
         if not self._profile_path:
             raise ValueError("prepare_runtime_files() 需要先设置 profile_path")
 
-        session_fpfile = os.path.join(
-            self._profile_path, "ruyipage_per_tab_proxy_fp.txt"
+        session_name = (
+            "ruyipage_per_tab_proxy_fp.txt"
+            if self._per_tab_proxies
+            else "ruyipage_runtime_fp.txt"
         )
+        session_fpfile = os.path.join(self._profile_path, session_name)
 
         source_lines = []
         if self._source_fpfile:
@@ -576,19 +587,22 @@ class FirefoxOptions(object):
 
         lines = []
         for raw_line in source_lines:
+            if self._should_omit_runtime_http_proxy_line(raw_line):
+                continue
             if self._should_omit_per_tab_proxy_line(raw_line):
                 continue
             lines.append(raw_line)
 
-        if lines and lines[-1].strip():
+        if self._per_tab_proxies and lines and lines[-1].strip():
             lines.append("")
 
-        lines.append("proxy.rotate.enabled=true")
-        lines.append(
-            "proxy.rotate.exhausted={}".format(self._per_tab_proxy_exhausted)
-        )
-        for proxy in self._per_tab_proxies:
-            lines.append("proxy.rotate.proxy={}".format(proxy))
+        if self._per_tab_proxies:
+            lines.append("proxy.rotate.enabled=true")
+            lines.append(
+                "proxy.rotate.exhausted={}".format(self._per_tab_proxy_exhausted)
+            )
+            for proxy in self._per_tab_proxies:
+                lines.append("proxy.rotate.proxy={}".format(proxy))
 
         os.makedirs(self._profile_path, exist_ok=True)
         with open(session_fpfile, "w", encoding="utf-8") as f:
@@ -596,6 +610,25 @@ class FirefoxOptions(object):
 
         self._runtime_fpfile = session_fpfile
         self._fpfile = session_fpfile
+
+    def _source_fpfile_has_http_proxy_fields(self):
+        if not self._source_fpfile:
+            return False
+        return self._read_http_proxy_from_fpfile(self._source_fpfile) is not None
+
+    def _should_omit_runtime_http_proxy_line(self, raw_line):
+        line = str(raw_line or "").strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            return False
+
+        delimiter_positions = [
+            pos for pos in (line.find(":"), line.find("=")) if pos != -1
+        ]
+        if not delimiter_positions:
+            return False
+
+        key = line[: min(delimiter_positions)].strip().lower()
+        return key in {"httpauth.host", "httpauth.port"}
 
     def smart_fingerprint(self, **kwargs):
         """一站式智能指纹配置（链式调用入口）。
@@ -972,6 +1005,50 @@ class FirefoxOptions(object):
 
         return self._parse_socks5_proxy_kv(kv)
 
+    def _read_http_proxy_from_fpfile(self, path):
+        if not path:
+            return None
+
+        fpfile_path = os.path.abspath(path)
+        if not os.path.exists(fpfile_path):
+            return None
+
+        kv = {}
+        with open(fpfile_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or line.startswith("//"):
+                    continue
+
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    kv[key.strip().lower()] = value.strip()
+
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    kv[key.strip().lower()] = value.strip()
+
+        return self._parse_http_proxy_kv(kv)
+
+    def _parse_http_proxy_kv(self, values):
+        host = (
+            values.get("httpauth.host")
+            or values.get("httpauth_host")
+            or values.get("http.host")
+            or values.get("http_host")
+            or values.get("httpproxy.host")
+            or values.get("httpproxy_host")
+        )
+        port = (
+            values.get("httpauth.port")
+            or values.get("httpauth_port")
+            or values.get("http.port")
+            or values.get("http_port")
+            or values.get("httpproxy.port")
+            or values.get("httpproxy_port")
+        )
+        return self._coerce_proxy(host, port)
+
     def _parse_socks5_proxy_value(self, key, value):
         if key in ("socks5", "socks5.proxy", "socks5.url"):
             return self._parse_socks5_proxy_line(value, keyed=True)
@@ -1032,6 +1109,9 @@ class FirefoxOptions(object):
         return self._coerce_socks5_proxy(parts[0], parts[1])
 
     def _coerce_socks5_proxy(self, host, port):
+        return self._coerce_proxy(host, port)
+
+    def _coerce_proxy(self, host, port):
         host = str(host or "").strip()
         if not host:
             return None
@@ -1042,6 +1122,30 @@ class FirefoxOptions(object):
         if port <= 0 or port > 65535:
             return None
         return {"host": host, "port": port}
+
+    def _split_proxy_for_profile(self, proxy):
+        value = str(proxy or "").strip()
+        if not value:
+            return None
+
+        if "://" in value:
+            parsed = urlsplit(value)
+            scheme = (parsed.scheme or "http").lower()
+            host = parsed.hostname or ""
+            port = parsed.port
+            if port is None:
+                port = 1080 if scheme.startswith("socks") else 8080
+            if not host:
+                raise ValueError("proxy host 不能为空")
+            return scheme, host, int(port)
+
+        scheme = "http"
+        addr = value.rsplit("@", 1)[-1]
+        host, port = addr.rsplit(":", 1) if ":" in addr else (addr, "8080")
+        host = host.strip()
+        if not host:
+            raise ValueError("proxy host 不能为空")
+        return scheme, host, int(port)
 
     def _looks_like_proxy_host(self, host):
         host = str(host or "").strip().lower()
@@ -1238,32 +1342,38 @@ class FirefoxOptions(object):
         # 代理设置
         proxy = self._proxy
         if not proxy and not self._per_tab_proxies:
-            socks5_proxy = self._read_socks5_proxy_from_fpfile(self._fpfile)
-            if socks5_proxy:
-                proxy = "socks5://{}:{}".format(
-                    socks5_proxy["host"], socks5_proxy["port"]
+            proxy_fpfile = self._source_fpfile or self._fpfile
+            http_proxy = self._read_http_proxy_from_fpfile(proxy_fpfile)
+            if http_proxy:
+                proxy = "http://{}:{}".format(
+                    http_proxy["host"], http_proxy["port"]
                 )
+            else:
+                socks5_proxy = self._read_socks5_proxy_from_fpfile(proxy_fpfile)
+                if socks5_proxy:
+                    proxy = "socks5://{}:{}".format(
+                        socks5_proxy["host"], socks5_proxy["port"]
+                    )
 
         if proxy:
-            if "://" in proxy:
-                scheme, addr = proxy.split("://", 1)
-            else:
-                scheme, addr = "http", proxy
-
-            host, port = addr.rsplit(":", 1) if ":" in addr else (addr, "8080")
+            scheme, host, port = self._split_proxy_for_profile(proxy)
 
             if scheme.startswith("socks"):
                 prefs["network.proxy.type"] = 1
                 prefs["network.proxy.socks"] = host
-                prefs["network.proxy.socks_port"] = int(port)
+                prefs["network.proxy.socks_port"] = port
                 prefs["network.proxy.socks_version"] = 5 if "5" in scheme else 4
                 prefs["network.proxy.socks_remote_dns"] = True
             else:
                 prefs["network.proxy.type"] = 1
                 prefs["network.proxy.http"] = host
-                prefs["network.proxy.http_port"] = int(port)
+                prefs["network.proxy.http_port"] = port
                 prefs["network.proxy.ssl"] = host
-                prefs["network.proxy.ssl_port"] = int(port)
+                prefs["network.proxy.ssl_port"] = port
+                # These startup probes can hit authenticated HTTP proxies before
+                # the BiDi session exists, leaving session.new waiting forever.
+                prefs.setdefault("network.captive-portal-service.enabled", False)
+                prefs.setdefault("network.connectivity-service.enabled", False)
                 prefs.setdefault("signon.autologin.proxy", True)
                 prefs.setdefault("network.auth.subresource-http-auth-allow", 2)
 

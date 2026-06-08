@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HTTP 密码代理示例：set_proxy() + fpfile httpauth.*。
+"""HTTP 密码代理示例：fpfile httpauth.*。
 
 用法：
     set RUYIPAGE_HTTP_PROXY_1=REPLACE_WITH_HTTP_USER:REPLACE_WITH_HTTP_PASSWORD@gate.example.com:1288
@@ -14,10 +14,12 @@
 说明：
 1. 默认使用 ``python -m ruyipage install`` 安装/更新的 runtime 浏览器。
 2. 如需手动指定浏览器，传 ``--browser-path`` 或设置 ``RUYIPAGE_FIREFOX_PATH``。
-3. HTTP 密码认证写入临时 fpfile，格式如下：
+3. HTTP 代理地址和密码认证都写入临时 fpfile，格式如下：
+       httpauth.host:<host>
+       httpauth.port:<port>
        httpauth.username:<username>
        httpauth.password:<password>
-4. Firefox 代理地址仍通过 ``opts.set_proxy("http://host:port")`` 设置。
+4. 不需要调用 ``opts.set_proxy()``，框架会从 fpfile 读取 HTTP host/port。
 """
 
 from __future__ import annotations
@@ -53,9 +55,13 @@ def parse_http_proxy(value: str) -> dict[str, str | int]:
     }
 
 
-def write_httpauth_fpfile(path: str, username: str, password: str) -> None:
-    # HTTP 代理认证字段由 ruyipage 在代理 407 challenge 时自动读取并提交。
+def write_httpauth_fpfile(
+    path: str, host: str, port: int, username: str, password: str
+) -> None:
+    # ruyipage 读取 host/port 写入 profile；指纹内核读取 username/password。
     with open(path, "w", encoding="utf-8") as f:
+        f.write("httpauth.host:{}\n".format(host))
+        f.write("httpauth.port:{}\n".format(port))
         f.write("httpauth.username:{}\n".format(username))
         f.write("httpauth.password:{}\n".format(password))
 
@@ -112,7 +118,13 @@ def main() -> int:
     page = None
 
     try:
-        write_httpauth_fpfile(fpfile.name, proxy["username"], proxy["password"])
+        write_httpauth_fpfile(
+            fpfile.name,
+            proxy["host"],
+            proxy["port"],
+            proxy["username"],
+            proxy["password"],
+        )
 
         opts = FirefoxOptions()
         browser_path = choose_browser_path(args.browser_path)
@@ -120,8 +132,6 @@ def main() -> int:
             opts.set_browser_path(browser_path)
         opts.set_auto_port(True)
         opts.set_user_dir(profile_dir)
-        # HTTP host/port 走 Firefox network.proxy.http/ssl，账号密码走 fpfile。
-        opts.set_proxy("http://{}:{}".format(proxy["host"], proxy["port"]))
         opts.set_fpfile(fpfile.name)
         opts.set_window_size(900, 700)
         opts.headless(args.headless)
