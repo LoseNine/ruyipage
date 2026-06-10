@@ -1132,6 +1132,87 @@ class Firefox(object):
 
     def _kill_firefox_by_port(self, port):
         """通过 /proc 找到监听指定端口的进程并终止，避免误杀无关 Firefox。"""
+        if sys.platform == "win32":
+            import json
+
+            target_pids = set()
+            ps_net = (
+                "Get-NetTCPConnection -State Listen | "
+                "Select-Object LocalAddress, LocalPort, OwningProcess | "
+                "ConvertTo-Json -Compress"
+            )
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command", ps_net],
+                    stderr=subprocess.DEVNULL,
+                )
+                data = json.loads(out.decode(errors="ignore") or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    try:
+                        item_port = int(item.get("LocalPort") or 0)
+                        pid = int(item.get("OwningProcess") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    addr = str(item.get("LocalAddress") or "")
+                    if (
+                        item_port == int(port)
+                        and pid > 0
+                        and addr in ("127.0.0.1", "::1", "0.0.0.0", "::")
+                    ):
+                        target_pids.add(pid)
+            except Exception as e:
+                logger.debug("按端口查询 Windows 监听进程失败: %s", e)
+                return
+
+            if not target_pids:
+                return
+
+            ps_proc = (
+                "Get-CimInstance Win32_Process | "
+                "Select-Object ProcessId, Name, CommandLine | "
+                "ConvertTo-Json -Compress"
+            )
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command", ps_proc],
+                    stderr=subprocess.DEVNULL,
+                )
+                data = json.loads(out.decode(errors="ignore") or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    try:
+                        pid = int(item.get("ProcessId") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if pid not in target_pids:
+                        continue
+                    name = str(item.get("Name") or "").lower()
+                    cmd = str(item.get("CommandLine") or "").lower()
+                    name_ok = any(
+                        pattern in name
+                        for pattern in DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS
+                    )
+                    cmd_ok = any(
+                        pattern in cmd
+                        for pattern in DEFAULT_FIREFOX_COMMANDLINE_PATTERNS
+                    )
+                    if not (name_ok or cmd_ok):
+                        continue
+                    logger.debug("找到端口 %d 的 Firefox 进程 PID=%d，正在终止", port, pid)
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                    return
+            except Exception as e:
+                logger.debug("按 PID 查询 Windows Firefox 进程失败: %s", e)
+            return
+
         import signal
 
         target_port_hex = format(port, "X").upper()
@@ -1195,7 +1276,7 @@ class Firefox(object):
                 self._process.kill()
                 self._process.wait(timeout=5)
             elif sys.platform == "win32":
-                os.system("taskkill /f /im firefox.exe >nul 2>&1")
+                self._kill_firefox_by_port(int(port_str))
             else:
                 self._kill_firefox_by_port(self._options.port)
         except Exception:

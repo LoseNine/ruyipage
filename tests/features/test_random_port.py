@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+import json
+
 import pytest
 
 import ruyipage as ruyipage_module
@@ -173,3 +175,87 @@ def test_bidi_server_default_options_use_random_high_port(monkeypatch):
     assert "--remote-debugging-port={}".format(selected_port) in commands[0]
     assert waited == [("127.0.0.1", selected_port)]
     assert ws_requests == [("127.0.0.1", selected_port)]
+
+
+def test_windows_stuck_session_cleanup_kills_only_current_port(monkeypatch):
+    opts = FirefoxOptions().set_address("127.0.0.1:12000").existing_only(True)
+    browser = _make_browser(opts)
+    browser._driver = None
+    browser._process = None
+
+    system_calls = []
+    killed_ports = []
+
+    monkeypatch.setattr(browser_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        browser_module.os,
+        "system",
+        lambda command: system_calls.append(command) or 0,
+    )
+    monkeypatch.setattr(
+        browser,
+        "_kill_firefox_by_port",
+        lambda port: killed_ports.append(port),
+    )
+    monkeypatch.setattr(browser_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(browser, "_is_port_open", lambda: False)
+
+    browser._restart_firefox_for_stuck_session()
+
+    assert killed_ports == [12000]
+    assert not any("/im firefox.exe" in call.lower() for call in system_calls)
+
+
+def test_windows_kill_firefox_by_port_targets_owning_pid(monkeypatch):
+    browser = _make_browser(FirefoxOptions())
+    killed = []
+
+    def fake_check_output(command, stderr=None):
+        script = command[-1]
+        if "Get-CimInstance Win32_Process" in script:
+            return json.dumps(
+                [
+                    {
+                        "ProcessId": 4242,
+                        "Name": "firefox.exe",
+                        "CommandLine": "firefox.exe --remote-debugging-port=12000",
+                    },
+                    {
+                        "ProcessId": 7777,
+                        "Name": "not-firefox.exe",
+                        "CommandLine": "not-firefox.exe",
+                    },
+                ]
+            ).encode()
+        if "Get-NetTCPConnection" in script:
+            return json.dumps(
+                [
+                    {
+                        "LocalAddress": "127.0.0.1",
+                        "LocalPort": 12000,
+                        "OwningProcess": 4242,
+                    },
+                    {
+                        "LocalAddress": "127.0.0.1",
+                        "LocalPort": 12001,
+                        "OwningProcess": 7777,
+                    },
+                ]
+            ).encode()
+        raise AssertionError(script)
+
+    def fake_run(command, **kwargs):
+        killed.append(command)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(browser_module.sys, "platform", "win32")
+    monkeypatch.setattr(browser_module.subprocess, "check_output", fake_check_output)
+    monkeypatch.setattr(browser_module.subprocess, "run", fake_run)
+
+    browser._kill_firefox_by_port(12000)
+
+    assert killed == [["taskkill", "/F", "/PID", "4242"]]

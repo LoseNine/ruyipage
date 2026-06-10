@@ -155,6 +155,10 @@ class SelectElement(object):
             0.03
         ).perform()
 
+    def _dismiss_native_popup(self):
+        """Close an expanded native select popup after selection is committed."""
+        self._ele._call_js_on_self("(el) => { el.blur(); }")
+
     def _native_select_stepwise(self, target_index):
         """State-driven native select for single select.
 
@@ -184,6 +188,7 @@ class SelectElement(object):
 
         # 已经是目标选项，无需动作
         if state.get("selectedIndex") == target_index:
+            self._dismiss_native_popup()
             return True
 
         if not self._focus_select_native():
@@ -213,7 +218,10 @@ class SelectElement(object):
 
         self._commit_with_enter()
         final_state = self._read_state()
-        return final_state.get("selectedIndex") == target_index
+        success = final_state.get("selectedIndex") == target_index
+        if success:
+            self._dismiss_native_popup()
+        return success
 
     # ---------- js fallback ----------
     def _js_select_text(self, text):
@@ -225,6 +233,7 @@ class SelectElement(object):
                 if (opt.text === text || opt.textContent.trim() === text) {
                     opt.selected = true;
                     el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.blur();
                     return true;
                 }
             }
@@ -232,6 +241,7 @@ class SelectElement(object):
                 if (opt.text.includes(text) || opt.textContent.includes(text)) {
                     opt.selected = true;
                     el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.blur();
                     return true;
                 }
             }
@@ -251,6 +261,7 @@ class SelectElement(object):
                 if (opt.value === value) {
                     opt.selected = true;
                     el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.blur();
                     return true;
                 }
             }
@@ -269,6 +280,7 @@ class SelectElement(object):
             if (idx >= 0 && idx < el.options.length) {
                 el.selectedIndex = idx;
                 el.dispatchEvent(new Event('change', {bubbles: true}));
+                el.blur();
                 return true;
             }
             return false;
