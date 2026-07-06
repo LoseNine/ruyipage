@@ -50,7 +50,7 @@ UNIT_PROPERTIES = {
     "set", "local_storage", "session_storage", "console", "intercept",
     "capture", "network", "window", "browser_tools", "contexts", "emulation",
     "extensions", "downloads", "events", "navigation", "prefs",
-    "realms", "config", "trace",
+    "realms", "config", "trace", "prompts",
 }
 
 # 需要 I/O 的属性 → 生成 async get_xxx() 方法

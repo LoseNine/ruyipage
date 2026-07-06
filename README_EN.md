@@ -1538,6 +1538,7 @@ High-level entry:
 - `page.input_prompt(text)`
 - `page.set_prompt_handler(...)`
 - `page.clear_prompt_handler()`
+- `page.prompts.set_auto(accept=True)`
 
 ### Typical patterns
 
@@ -1555,6 +1556,14 @@ page.accept_prompt()
 page.set_prompt_handler(prompt="ignore", prompt_text="张三")
 page.run_js("prompt('请输入姓名')", as_expr=False)
 page.clear_prompt_handler()
+```
+
+#### Compatible manager style
+
+```python
+page.prompts.set_auto(accept=True)
+page.run_js("alert('hello')", as_expr=False)
+page.prompts.clear()
 ```
 
 ---

@@ -3,7 +3,7 @@
 # │ WARNING: 此文件由 scripts/generate_async_api.py 自动生成          │
 # │ 请勿手动编辑！修改后请重新运行生成器：                               │
 # │   python scripts/generate_async_api.py                          │
-# │ 生成时间: 2026-06-07 01:25:07                                        │
+# │ 生成时间: 2026-07-06 21:06:09                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
 from .greenlet_bridge import greenlet_spawn
@@ -230,6 +230,12 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         if "prefs" not in self._unit_cache:
             self._unit_cache["prefs"] = AsyncUnitProxy(self._sync.prefs, owner=self)
         return self._unit_cache["prefs"]
+
+    @property
+    def prompts(self):
+        if "prompts" not in self._unit_cache:
+            self._unit_cache["prompts"] = AsyncUnitProxy(self._sync.prompts, owner=self)
+        return self._unit_cache["prompts"]
 
     @property
     def realms(self):

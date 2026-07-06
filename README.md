@@ -1574,6 +1574,7 @@ page.remove_preload_script(preload)
 - `page.input_prompt(text)`
 - `page.set_prompt_handler(...)`
 - `page.clear_prompt_handler()`
+- `page.prompts.set_auto(accept=True)`
 
 ### 典型写法
 
@@ -1591,6 +1592,14 @@ page.accept_prompt()
 page.set_prompt_handler(prompt="ignore", prompt_text="张三")
 page.run_js("prompt('请输入姓名')", as_expr=False)
 page.clear_prompt_handler()
+```
+
+#### 兼容 manager 写法
+
+```python
+page.prompts.set_auto(accept=True)
+page.run_js("alert('hello')", as_expr=False)
+page.prompts.clear()
 ```
 
 ---

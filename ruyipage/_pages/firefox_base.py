@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .._units.browser import BrowserManager
     from .._units.contexts import ContextManager
     from .._units.downloads import DownloadsManager
+    from .._units.prompts import PromptsManager
     from .._units.events import EventTracker
     from .._units.network_tools import NetworkManager
     from .._units.navigation import NavigationTracker
@@ -90,6 +91,7 @@ class FirefoxBase(BasePage):
         self._emulation = None
         self._extensions = None
         self._downloads = None
+        self._prompts = None
         self._events = None
         self._navigation = None
         self._prefs = None
@@ -3655,6 +3657,15 @@ class FirefoxBase(BasePage):
         return self._downloads
 
     @property
+    def prompts(self) -> "PromptsManager":
+        """User prompt manager for alert/confirm/prompt dialogs."""
+        if self._prompts is None:
+            from .._units.prompts import PromptsManager
+
+            self._prompts = PromptsManager(self)
+        return self._prompts
+
+    @property
     def events(self) -> "EventTracker":
         """通用 BiDi 事件跟踪器。
 
@@ -5002,6 +5013,21 @@ class FirefoxBase(BasePage):
         from .._bidi import browsing_context as bidi_context
 
         self.clear_prompt_handler()
+        valid_actions = {"accept", "dismiss", "ignore"}
+        actions = {
+            "alert": alert,
+            "confirm": confirm,
+            "prompt": prompt,
+            "default": default,
+        }
+        for key, value in actions.items():
+            if value not in valid_actions:
+                raise ValueError(
+                    "{} prompt handler action must be one of {}".format(
+                        key, ", ".join(sorted(valid_actions))
+                    )
+                )
+
         self._prompt_handler_config = {
             "alert": alert,
             "confirm": confirm,
@@ -5014,40 +5040,33 @@ class FirefoxBase(BasePage):
             if params.get("context") != self.tab_id:
                 return
             self._last_prompt_opened = dict(params)
+            if not self._prompt_handler_config:
+                return
+
+            prompt_type = params.get("type") or "default"
+            action = self._prompt_handler_config.get(
+                prompt_type, self._prompt_handler_config.get("default", "accept")
+            )
+            user_text = None
             if (
-                params.get("type") == "prompt"
-                and self._prompt_handler_config
-                and self._prompt_handler_config.get("prompt") == "ignore"
+                prompt_type == "prompt"
                 and self._prompt_handler_config.get("prompt_text") is not None
+                and action in {"accept", "ignore"}
             ):
+                action = "accept"
+                user_text = str(self._prompt_handler_config.get("prompt_text"))
+
+            if action != "ignore":
                 try:
                     bidi_context.handle_user_prompt(
                         self._driver._browser_driver,
                         self.tab_id,
-                        accept=True,
-                        user_text=str(self._prompt_handler_config.get("prompt_text")),
+                        accept=(action == "accept"),
+                        user_text=user_text,
                     )
                 except Exception as e:
-                    logger.warning("自动处理对话框失败: %s", e)
-
-        def on_closed(params):
-            if params.get("context") != self.tab_id:
-                return
-            self._last_prompt_closed = dict(params)
-
-        self._driver._browser_driver.set_callback(
-            "browsingContext.userPromptOpened",
-            on_opened,
-            context=self.tab_id,
-            immediate=True,
-        )
-        self._driver._browser_driver.set_callback(
-            "browsingContext.userPromptClosed",
-            on_closed,
-            context=self.tab_id,
-            immediate=True,
-        )
-
+                    logger.warning("auto prompt handling failed: %s", e)
+            return
 
         def on_closed(params):
             if params.get("context") != self.tab_id:
