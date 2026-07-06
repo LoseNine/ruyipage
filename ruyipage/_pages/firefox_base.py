@@ -9,6 +9,7 @@ import base64
 import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 from .._base.base import BasePage
 from .._base.driver import ContextDriver
@@ -54,6 +55,55 @@ if TYPE_CHECKING:
     from .._units.extensions import ExtensionManager
     from .._base.browser import Firefox
     from .._pages.firefox_frame import FirefoxFrame
+
+
+def _normalize_frame_url(url):
+    if not url:
+        return ""
+
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return url
+
+    if not parts.scheme or not parts.netloc or not parts.hostname:
+        return url
+
+    scheme = parts.scheme.lower()
+    hostname = parts.hostname.lower()
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = "[{}]".format(hostname)
+
+    netloc = hostname
+    if parts.username:
+        userinfo = parts.username
+        if parts.password is not None:
+            userinfo = "{}:{}".format(userinfo, parts.password)
+        netloc = "{}@{}".format(userinfo, netloc)
+
+    is_default_port = (scheme == "http" and port == 80) or (
+        scheme == "https" and port == 443
+    )
+    if port is not None and not is_default_port:
+        netloc = "{}:{}".format(netloc, port)
+
+    return urlunsplit((scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _frame_url_matches(element_url, context_url):
+    if not element_url or not context_url:
+        return False
+    if element_url in context_url:
+        return True
+
+    normalized_element_url = _normalize_frame_url(element_url)
+    normalized_context_url = _normalize_frame_url(context_url)
+    return bool(
+        normalized_element_url
+        and normalized_context_url
+        and normalized_element_url in normalized_context_url
+    )
 
 
 class FirefoxBase(BasePage):
@@ -5564,7 +5614,7 @@ class FirefoxBase(BasePage):
             ele_src = ele.attr("src") or ""
             for child in children:
                 child_url = child.get("url", "")
-                if ele_src and ele_src in child_url:
+                if _frame_url_matches(ele_src, child_url):
                     return FirefoxFrame(self._browser, child["context"], self)
 
             # 如果只有一个 iframe，直接返回第一个 child

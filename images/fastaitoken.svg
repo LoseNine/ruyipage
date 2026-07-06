@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120" role="img" aria-label="FastAIToken logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#04111f"/>
+      <stop offset="0.48" stop-color="#0369a1"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="0.5" stop-color="#facc15"/>
+      <stop offset="1" stop-color="#86efac"/>
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="240" height="120" rx="22" fill="url(#bg)"/>
+  <path d="M32 30h176M32 90h176M52 22v76M188 22v76" stroke="rgba(255,255,255,0.16)" stroke-width="1"/>
+  <path d="M46 78c18-36 42-36 60 0s42 36 60 0 42-36 60 0" fill="none" stroke="url(#line)" stroke-width="4" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="54" cy="32" r="4" fill="#67e8f9" filter="url(#softGlow)"/>
+  <circle cx="186" cy="88" r="4" fill="#86efac" filter="url(#softGlow)"/>
+  <text x="120" y="60" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="26" font-weight="800" letter-spacing="1.5" fill="#fff" filter="url(#softGlow)">FastAI</text>
+  <text x="120" y="86" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="2" fill="#ecfeff">Token</text>
+</svg>

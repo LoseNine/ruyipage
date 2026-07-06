@@ -30,14 +30,14 @@
 <table>
   <tr>
     <td width="180" align="center">
-      <a href="https://xjbtoken.site/">
-        <img src="images/xjbtoken.svg" width="160" alt="XJB AI" />
+      <a href="https://fastaitoken.com/">
+        <img src="images/fastaitoken.svg" width="160" alt="FastAIToken" />
       </a>
     </td>
     <td>
       <sub>赞助商</sub><br>
-      <a href="https://xjbtoken.site/"><b>XJBToken</b></a><br>
-      低价实惠的 AI Token 中转站，包含 GPT 5.4 / 5.5 全系列，以及 Claude Opus 4.6 / 4.7 的 Kiro 和 Max 渠道，包纯度，实用耐蹬，如意自用：<a href="https://xjbtoken.site/">https://xjbtoken.site/</a>。
+      <a href="https://fastaitoken.com/"><b>FastAIToken</b></a><br>
+      低价实惠的 AI Token 中转站，包含 GPT 5.4 / 5.5 全系列，以及 Claude Opus 4.6 / 4.7 / 4.8 的 Kiro 和 Max 渠道，包纯度，实用耐蹬，如意自用：<a href="https://fastaitoken.com/">https://fastaitoken.com/</a>。
     </td>
   </tr>
 </table>
