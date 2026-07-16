@@ -14,7 +14,6 @@ from urllib.parse import urlsplit, urlunsplit
 from .._base.base import BasePage
 from .._base.driver import ContextDriver
 from .._bidi import browsing_context as bidi_context
-from .._bidi import emulation as bidi_emulation
 from .._bidi import script as bidi_script
 from .._functions.bidi_values import parse_value, make_shared_ref
 from .._functions.locator import parse_locator
@@ -5376,48 +5375,28 @@ class FirefoxBase(BasePage):
     def set_window_size(
         self, width, height, device_pixel_ratio=None
     ) -> "FirefoxBase":
-        """同步设置当前窗口外框、viewport 和 screen 尺寸。
+        """设置当前浏览器窗口外框尺寸。
 
         Args:
             width: 目标宽度（CSS 像素）。
             height: 目标高度（CSS 像素）。
-            device_pixel_ratio: 可选 DPR。传 ``None`` 表示不改动当前 DPR。
+            device_pixel_ratio: 已保留用于兼容旧调用；此方法不修改 DPR。
 
         Returns:
             self: 原页面对象，便于链式调用。
 
         说明:
             - ``FirefoxOptions.set_window_size()`` 只负责启动时窗口参数。
-            - 运行时如果希望 ``page.rect.window_size``、
-              ``page.rect.viewport_size``、``window.inner*`` 和 ``screen.*``
-              一起对齐，请使用此方法。
+            - 此方法只调整浏览器外框，``window.inner*`` / ``page.rect.viewport_size``
+              由 Firefox 按 chrome 边框、工具栏、DPI 等自然计算。
+            - 需要显式模拟视口时请调用 ``set_viewport()``。
+            - 需要 hook ``screen.*`` 时请调用 ``page.emulation.set_screen_size()``。
         """
         set_size_only = getattr(self.window, "_set_size_only", None)
         if callable(set_size_only):
             set_size_only(width, height)
         else:
             self.window.set_size(width, height)
-        try:
-            self.emulation.set_screen_size(
-                width, height, device_pixel_ratio=device_pixel_ratio
-            )
-        except Exception:
-            pass
-        try:
-            self.set_viewport(width, height, device_pixel_ratio, timeout=3)
-        except BiDiError as e:
-            if str(getattr(e, "error", "")).lower() != "timeout":
-                raise
-            logger.debug("browsingContext.setViewport timeout; using JS viewport fallback")
-            try:
-                bidi_emulation.inject_viewport_settings_override(
-                    self._driver._browser_driver,
-                    self._context_id,
-                    width,
-                    height,
-                )
-            except Exception as fallback_error:
-                logger.debug("Viewport fallback injection failed: %s", fallback_error)
         return self
 
     def set_viewport(

@@ -73,7 +73,7 @@ class WindowManager(object):
         return self._owner
 
     def set_size(self, width, height):
-        """Set runtime size and keep window/viewport metrics synchronized."""
+        """Set runtime browser outer-window size."""
         set_window_size = getattr(self._owner, "set_window_size", None)
         if callable(set_window_size):
             return set_window_size(width, height)

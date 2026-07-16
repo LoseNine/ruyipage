@@ -259,50 +259,6 @@ def inject_screen_settings_override(driver, context, width, height, device_pixel
 # ---------------------------------------------------------------------------
 
 
-def inject_viewport_settings_override(driver, context, width, height):
-    """Fallback override for window.innerWidth / innerHeight.
-
-    Used when ``browsingContext.setViewport`` hangs or is unsupported by a
-    fingerprint Firefox kernel. The preload makes future navigations see the
-    same viewport values, and the immediate call updates the current document.
-    """
-    from . import script as bidi_script
-
-    width_value = str(int(width))
-    height_value = str(int(height))
-    inject_js = """() => {
-  const width = %s;
-  const height = %s;
-  function define(target, name, value) {
-    try {
-      Object.defineProperty(target, name, {
-        get: () => value,
-        configurable: true
-      });
-    } catch (e) {}
-  }
-  define(window, 'innerWidth', width);
-  define(window, 'innerHeight', height);
-  if (window.visualViewport) {
-    define(window.visualViewport, 'width', width);
-    define(window.visualViewport, 'height', height);
-    define(window.visualViewport, 'scale', 1);
-  }
-}""" % (width_value, height_value)
-
-    result = bidi_script.add_preload_script(
-        driver, inject_js, contexts=[context], timeout=3
-    )
-    script_id = result.get("script", "")
-
-    try:
-        bidi_script.call_function(driver, context, inject_js, timeout=3)
-    except Exception as e:
-        logger.debug("Current page viewport override failed; preload still works: %s", e)
-
-    return script_id
-
-
 def set_network_conditions(driver, offline=False, contexts=None):
     """模拟网络条件 (Firefox 未实现)
 

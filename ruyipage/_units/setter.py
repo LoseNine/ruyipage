@@ -35,11 +35,11 @@ class PageSetter(object):
         return self._owner
 
     def window_size(self, width, height, device_pixel_ratio=None):
-        """同步设置窗口外框、viewport 和 screen。
+        """设置浏览器窗口外框尺寸。
 
-        这适合运行时需要让 ``window.outer*``、``window.inner*`` 和
-        ``screen.*`` 一起对齐的场景。它不改变
-        :class:`ruyipage._configs.firefox_options.FirefoxOptions` 的启动参数语义。
+        ``window.inner*`` / ``page.rect.viewport_size`` 由浏览器自然计算。
+        如需模拟视口请使用 ``viewport()``；如需 hook ``screen.*`` 请使用
+        ``page.emulation.set_screen_size()``。
         """
         return self._owner.set_window_size(
             width, height, device_pixel_ratio=device_pixel_ratio
