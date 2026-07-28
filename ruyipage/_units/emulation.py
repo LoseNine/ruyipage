@@ -1,11 +1,74 @@
 # -*- coding: utf-8 -*-
 """EmulationManager - 设备模拟管理器"""
 
+from dataclasses import dataclass
+from typing import Optional
+
 from .._bidi import emulation as bidi_emulation
 from .._bidi import browsing_context as bidi_context
+from ..errors import RuyiPageError
 import logging
 
 logger = logging.getLogger("ruyipage")
+UINT32_MAX = (2**32) - 1
+_UNSET = object()
+
+
+class TouchUnsupportedError(RuyiPageError):
+    """当前 Firefox 不支持运行时触摸覆盖且没有可用 fallback。"""
+
+
+class TouchStartupOnlyError(RuyiPageError):
+    """触摸 fallback 仅在启动时生效，当前运行时请求无法完成。"""
+
+
+def _validate_max_touch_points(value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(
+            "max_touch_points must be an integer in range 0..{}".format(UINT32_MAX)
+        )
+    if value < 0 or value > UINT32_MAX:
+        raise ValueError(
+            "max_touch_points must be in range 0..{}".format(UINT32_MAX)
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class TouchCapability(object):
+    """当前页面可用的触摸模拟能力。
+
+    Attributes:
+        native_supported: 是否确认支持原生 BiDi 触摸覆盖；未探测时为 ``None``。
+        fallback_configured: 是否配置了启动期 fpfile fallback。
+        fallback_installable: 当前启动模式是否允许安装 fpfile fallback。
+        user_context: 当前 browsing context 所属的 userContext ID。
+    """
+
+    native_supported: Optional[bool] = None
+    fallback_configured: bool = False
+    fallback_installable: bool = False
+    user_context: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class TouchOverrideResult(object):
+    """一次触摸覆盖请求的结构化结果。
+
+    ``source`` 为 ``native``、``fpfile`` 或 ``none``；``runtime_mutable``
+    表示该结果是否还能在当前浏览器会话中动态修改或重置。
+    """
+
+    enabled: bool
+    max_touch_points: Optional[int]
+    supported: bool
+    applied: bool
+    native_supported: bool
+    fallback_used: bool
+    source: str
+    runtime_mutable: bool
+    reason: Optional[str]
+    capability: TouchCapability
 
 
 class EmulationManager(object):
@@ -54,6 +117,175 @@ class EmulationManager(object):
             - 高层 API 向调用方返回统一的布尔支持结果
         """
         return result is not None
+
+    def _options(self):
+        browser = getattr(self._owner, "browser", None)
+        return getattr(browser, "options", None)
+
+    def _touch_scope_kwargs(self, scope):
+        if scope == "global":
+            return {}, None
+        if scope == "context":
+            return {"contexts": self._ctx()}, None
+        if scope == "user_context":
+            user_context = self._user_context()
+            if user_context:
+                return {"user_contexts": [user_context]}, user_context
+            return None, None
+        raise ValueError("scope must be 'context', 'user_context', or 'global'")
+
+    def get_touch_capability(self, native_supported=None, user_context=_UNSET):
+        """返回当前页面的触摸模拟能力快照。
+
+        Args:
+            native_supported: 已知的原生 BiDi 支持状态；``None`` 表示尚未探测。
+            user_context: 显式 userContext ID。省略时自动读取当前页面。
+
+        Returns:
+            TouchCapability: 原生支持、fallback 和 userContext 信息。
+        """
+        options = self._options()
+        fallback_configured = bool(
+            options and getattr(options, "touch_fallback_enabled", False)
+        )
+        fallback_installable = bool(
+            options
+            and hasattr(options, "can_install_touch_fallback")
+            and options.can_install_touch_fallback()
+        )
+        return TouchCapability(
+            native_supported=native_supported,
+            fallback_configured=fallback_configured,
+            fallback_installable=fallback_installable,
+            user_context=self._user_context() if user_context is _UNSET else user_context,
+        )
+
+    def _touch_startup_fallback_status(self, enabled, max_touch_points):
+        options = self._options()
+        if not options or not getattr(options, "touch_fallback_active", False):
+            return "none", False, None
+
+        configured_points = getattr(options, "touch_fallback_max_touch_points", None)
+        if not enabled:
+            return (
+                "fpfile",
+                False,
+                "startup touch fallback is active and cannot be disabled at runtime",
+            )
+        if configured_points != max_touch_points:
+            return (
+                "fpfile",
+                False,
+                "startup touch fallback max_touch_points={} does not match request {}".format(
+                    configured_points,
+                    max_touch_points,
+                ),
+            )
+        return "fpfile", True, None
+
+    def _resolve_capability_user_context(self, scope, scoped_user_context):
+        if scope == "user_context":
+            return scoped_user_context
+        return self._user_context()
+
+    def set_touch_enabled_result(
+        self, enabled=True, max_touch_points=1, scope="context", strict=False
+    ):
+        """设置或清除 ``navigator.maxTouchPoints`` 覆盖并返回详细结果。
+
+        Args:
+            enabled: ``True`` 设置覆盖，``False`` 清除覆盖。
+            max_touch_points: 最大触点数，允许 ``0..4294967295``。
+            scope: ``context``、``user_context`` 或 ``global``。
+            strict: 为 ``True`` 时，不支持或只能启动期生效会直接抛出异常。
+
+        Returns:
+            TouchOverrideResult: 是否应用、实现来源、运行时可变性及失败原因。
+
+        Raises:
+            TypeError: ``max_touch_points`` 不是整数。
+            ValueError: 触点数越界或 ``scope`` 无效。
+            TouchUnsupportedError: strict 模式下原生命令和 fallback 均不可用。
+            TouchStartupOnlyError: strict 模式下请求与启动期 fallback 不匹配。
+        """
+        requested_max_touch_points = _validate_max_touch_points(max_touch_points)
+        scope_kwargs, user_context = self._touch_scope_kwargs(scope)
+        if scope == "user_context" and not user_context:
+            reason = "current browsing context has no userContext"
+            if strict:
+                raise TouchUnsupportedError(reason)
+            capability = self.get_touch_capability(
+                native_supported=None,
+                user_context=None,
+            )
+            return TouchOverrideResult(
+                enabled=enabled,
+                max_touch_points=requested_max_touch_points,
+                supported=False,
+                applied=False,
+                native_supported=False,
+                fallback_used=False,
+                source="none",
+                runtime_mutable=False,
+                reason=reason,
+                capability=capability,
+            )
+        result = bidi_emulation.set_touch_override(
+            self._owner._driver._browser_driver,
+            max_touch_points=requested_max_touch_points if enabled else None,
+            **scope_kwargs,
+        )
+        if result is not None:
+            capability_user_context = self._resolve_capability_user_context(
+                scope,
+                user_context,
+            )
+            capability = self.get_touch_capability(
+                native_supported=True,
+                user_context=capability_user_context,
+            )
+            return TouchOverrideResult(
+                enabled=enabled,
+                max_touch_points=requested_max_touch_points,
+                supported=True,
+                applied=True,
+                native_supported=True,
+                fallback_used=False,
+                source="native",
+                runtime_mutable=True,
+                reason=None,
+                capability=capability,
+            )
+
+        capability = self.get_touch_capability(
+            native_supported=False,
+            user_context=self._resolve_capability_user_context(scope, user_context),
+        )
+        source, applied, reason = self._touch_startup_fallback_status(
+            enabled,
+            requested_max_touch_points,
+        )
+        supported = source == "fpfile"
+        fallback_used = applied and source == "fpfile"
+        if strict:
+            if source == "none":
+                raise TouchUnsupportedError(
+                    "emulation.setTouchOverride is unsupported and no startup fallback is active"
+                )
+            if not applied:
+                raise TouchStartupOnlyError(reason)
+        return TouchOverrideResult(
+            enabled=enabled,
+            max_touch_points=requested_max_touch_points,
+            supported=supported,
+            applied=applied,
+            native_supported=False,
+            fallback_used=fallback_used,
+            source=source,
+            runtime_mutable=False,
+            reason=reason,
+            capability=capability,
+        )
 
     def set_geolocation(self, latitude, longitude, accuracy=100):
         """设置地理位置 (FF139+)。
@@ -187,36 +419,24 @@ class EmulationManager(object):
         return self._supported(result)
 
     def set_touch_enabled(self, enabled=True, max_touch_points=1, scope="context"):
-        """启用/禁用触摸模拟。
+        """设置触摸覆盖并返回是否已应用。
 
         Args:
-            enabled: True=启用，False=禁用
-            max_touch_points: 启用时的最大触点数，通常为 1 或 5
-            scope: 'context' / 'global' / 'user_context'
+            enabled: ``True`` 设置覆盖，``False`` 清除覆盖。
+            max_touch_points: 最大触点数，允许 ``0..4294967295``。
+            scope: ``context``、``user_context`` 或 ``global``。
 
         Returns:
-            bool: 当前浏览器是否支持该命令
+            bool: 原生覆盖或匹配的启动期 fallback 已生效时为 ``True``。
+
+        Notes:
+            需要失败原因和能力信息时使用 :meth:`set_touch_enabled_result`。
         """
-        value = max_touch_points if enabled else None
-        if scope == "global":
-            result = bidi_emulation.set_touch_override(
-                self._owner._driver._browser_driver,
-                max_touch_points=value,
-            )
-        elif scope == "user_context":
-            user_context = getattr(self._owner.browser.options, "user_context", None)
-            result = bidi_emulation.set_touch_override(
-                self._owner._driver._browser_driver,
-                max_touch_points=value,
-                user_contexts=user_context if user_context else None,
-            )
-        else:
-            result = bidi_emulation.set_touch_override(
-                self._owner._driver._browser_driver,
-                max_touch_points=value,
-                contexts=self._ctx(),
-            )
-        return self._supported(result)
+        return self.set_touch_enabled_result(
+            enabled=enabled,
+            max_touch_points=max_touch_points,
+            scope=scope,
+        ).applied
 
     def set_javascript_enabled(self, enabled=True):
         """启用/禁用 JavaScript。

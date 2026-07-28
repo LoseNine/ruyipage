@@ -1620,6 +1620,35 @@ page.emulation.apply_mobile_preset(
 )
 ```
 
+### H5 触摸能力
+
+```python
+# 运行时覆盖当前标签页的 navigator.maxTouchPoints
+result = page.emulation.set_touch_enabled_result(
+    True,
+    max_touch_points=5,
+    scope="context",
+    strict=True,
+)
+print(result.applied, result.source)
+
+# 发送真实 pointerType=touch 的输入动作
+page.touch.tap((120, 60)).perform()
+
+# 清除当前标签页的覆盖
+page.emulation.set_touch_enabled(False, scope="context")
+```
+
+旧版 Firefox 可在启动前配置 fpfile fallback：
+
+```python
+options = FirefoxOptions().set_touch_fallback(max_touch_points=5)
+page = FirefoxPage(options)
+```
+
+`scope` 支持 `context`、`user_context` 和 `global`。fallback 只在浏览器启动时
+生效，运行时状态和失败原因可通过 `TouchOverrideResult` 查看。
+
 注意：
 
 - 某些 emulation 命令在当前 Firefox 版本中可能未实现

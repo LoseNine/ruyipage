@@ -1584,6 +1584,35 @@ page.emulation.apply_mobile_preset(
 )
 ```
 
+### H5 touch capability
+
+```python
+# Override navigator.maxTouchPoints for the current tab at runtime.
+result = page.emulation.set_touch_enabled_result(
+    True,
+    max_touch_points=5,
+    scope="context",
+    strict=True,
+)
+print(result.applied, result.source)
+
+# Send trusted pointerType=touch input actions.
+page.touch.tap((120, 60)).perform()
+
+# Clear the override for the current tab.
+page.emulation.set_touch_enabled(False, scope="context")
+```
+
+Older Firefox builds can use an fpfile fallback configured before launch:
+
+```python
+options = FirefoxOptions().set_touch_fallback(max_touch_points=5)
+page = FirefoxPage(options)
+```
+
+`scope` accepts `context`, `user_context`, and `global`. The fallback only takes
+effect during browser startup; inspect `TouchOverrideResult` for status and errors.
+
 Notes:
 
 - some emulation commands may not yet be implemented in the current Firefox version

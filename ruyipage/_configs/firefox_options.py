@@ -10,6 +10,19 @@ from urllib.parse import unquote, urlsplit
 DEFAULT_REMOTE_DEBUGGING_PORT = 9222
 DEFAULT_RANDOM_PORT_START = 10000
 DEFAULT_RANDOM_PORT_END = 65535
+UINT32_MAX = (2**32) - 1
+
+
+def _validate_touch_max_touch_points(value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(
+            "max_touch_points must be an integer in range 0..{}".format(UINT32_MAX)
+        )
+    if value < 0 or value > UINT32_MAX:
+        raise ValueError(
+            "max_touch_points must be in range 0..{}".format(UINT32_MAX)
+        )
+    return value
 
 
 class FirefoxOptions(object):
@@ -73,6 +86,9 @@ class FirefoxOptions(object):
         self._per_tab_proxies = []  # 规范化后的 proxy.rotate.proxy 列表
         self._per_tab_proxy_exhausted = "wrap"  # proxy.rotate.exhausted
         self._fpfile_http_proxy_enabled = False  # httpauth.host/port 生成的 HTTP 代理
+        self._touch_fallback_enabled = False
+        self._touch_fallback_max_touch_points = 1
+        self._touch_fallback_profile = "mobile"
         self._private_mode = False  # Firefox 私密浏览模式
         self._user_prompt_handler = None  # session.UserPromptHandler
         self._xpath_picker_enabled = False  # 页面 XPath 选择浮窗
@@ -177,6 +193,26 @@ class FirefoxOptions(object):
     def fpfile(self):
         """指纹配置文件路径"""
         return self._fpfile
+
+    @property
+    def touch_fallback_enabled(self):
+        """是否启用启动期触摸兼容配置。"""
+        return bool(self._touch_fallback_enabled)
+
+    @property
+    def touch_fallback_profile(self):
+        """启动期触摸兼容配置名称，当前支持 ``mobile``。"""
+        return self._touch_fallback_profile
+
+    @property
+    def touch_fallback_max_touch_points(self):
+        """启动期 fallback 配置的最大触点数。"""
+        return self._touch_fallback_max_touch_points
+
+    @property
+    def touch_fallback_active(self):
+        """当前会话是否已经生成并启用触摸 fpfile。"""
+        return bool(self._touch_fallback_enabled and self._runtime_fpfile)
 
     @property
     def per_tab_proxies(self):
@@ -625,12 +661,58 @@ class FirefoxOptions(object):
         """``set_per_tab_proxies()`` 的新手友好别名。"""
         return self.set_per_tab_proxies(proxies, exhausted=exhausted)
 
+    def set_touch_fallback(self, enabled=True, max_touch_points=1, profile="mobile"):
+        """配置旧版 Firefox 使用的启动期触摸 fpfile fallback。
+
+        该方法只配置启动参数，不会修改用户提供的源 fpfile。启动前会在
+        profile 中生成运行期副本，并写入触摸能力、粗指针和 legacy API 字段。
+
+        Args:
+            enabled: 是否启用 fallback。
+            max_touch_points: 最大触点数，允许 ``0..4294967295``。
+            profile: 兼容配置名称，当前只支持 ``mobile``。
+
+        Returns:
+            FirefoxOptions: 当前配置对象，支持链式调用。
+
+        Raises:
+            TypeError: ``max_touch_points`` 不是整数。
+            ValueError: 触点数越界或 profile 不受支持。
+        """
+        profile = str(profile or "mobile").strip().lower()
+        if profile not in {"mobile"}:
+            raise ValueError("profile 必须是 'mobile'")
+
+        max_touch_points = _validate_touch_max_touch_points(max_touch_points)
+
+        self._touch_fallback_enabled = bool(enabled)
+        self._touch_fallback_max_touch_points = max_touch_points
+        self._touch_fallback_profile = profile
+        if self._runtime_fpfile and self._fpfile == self._runtime_fpfile:
+            self._fpfile = self._source_fpfile
+        self._runtime_fpfile = None
+        return self
+
+    def can_install_touch_fallback(self):
+        """返回当前启动模式是否允许生成触摸 fallback 文件。"""
+        return bool(
+            self._touch_fallback_enabled
+            and not self._existing_only
+            and self._profile_path
+        )
+
     def prepare_runtime_files(self):
         """在 profile 就绪后生成运行期 session fpfile。"""
         has_http_proxy = self._source_fpfile_has_http_proxy_fields()
         self._fpfile_http_proxy_enabled = bool(has_http_proxy)
         proxy_url_auth_lines = self._proxy_url_auth_runtime_lines()
-        if not self._per_tab_proxies and not has_http_proxy and not proxy_url_auth_lines:
+        has_touch_fallback = self._touch_fallback_enabled
+        if (
+            not self._per_tab_proxies
+            and not has_http_proxy
+            and not proxy_url_auth_lines
+            and not has_touch_fallback
+        ):
             return
 
         if not self._profile_path:
@@ -657,6 +739,8 @@ class FirefoxOptions(object):
                 continue
             if self._should_omit_per_tab_proxy_line(raw_line):
                 continue
+            if self._should_omit_touch_fallback_line(raw_line):
+                continue
             lines.append(raw_line)
 
         if self._per_tab_proxies and lines and lines[-1].strip():
@@ -674,6 +758,11 @@ class FirefoxOptions(object):
             if lines and lines[-1].strip():
                 lines.append("")
             lines.extend(proxy_url_auth_lines)
+
+        if has_touch_fallback:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.extend(self._touch_fallback_runtime_lines())
 
         os.makedirs(self._profile_path, exist_ok=True)
         with open(session_fpfile, "w", encoding="utf-8") as f:
@@ -723,6 +812,39 @@ class FirefoxOptions(object):
 
         key = line[: min(delimiter_positions)].strip().lower()
         return key in {"httpauth.host", "httpauth.port"}
+
+    def _touch_fallback_runtime_lines(self):
+        if self._touch_fallback_profile == "mobile":
+            return [
+                "touch.enabled=true",
+                "touch.maxTouchPoints={}".format(
+                    self._touch_fallback_max_touch_points
+                ),
+                "touch.legacyApis=true",
+                "touch.primaryPointer=coarse",
+                "touch.anyPointer=coarse",
+            ]
+        return []
+
+    def _should_omit_touch_fallback_line(self, raw_line):
+        line = str(raw_line or "").strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            return False
+
+        delimiter_positions = [
+            pos for pos in (line.find(":"), line.find("=")) if pos != -1
+        ]
+        if not delimiter_positions:
+            return False
+
+        key = line[: min(delimiter_positions)].strip().lower()
+        return key in {
+            "touch.enabled",
+            "touch.maxtouchpoints",
+            "touch.legacyapis",
+            "touch.primarypointer",
+            "touch.anypointer",
+        }
 
     def smart_fingerprint(self, **kwargs):
         """一站式智能指纹配置（链式调用入口）。

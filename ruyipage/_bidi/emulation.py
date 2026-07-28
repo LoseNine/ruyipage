@@ -24,6 +24,18 @@ import logging
 logger = logging.getLogger("ruyipage")
 
 
+def _is_unsupported_error(error):
+    err_type = str(getattr(error, "error", "")).lower()
+    err_text = str(error).lower()
+    return (
+        err_type == "unknown command"
+        or "unknown command" in err_text
+        or "not supported" in err_text
+        or "unknown method" in err_text
+        or "invalid method" in err_text
+    )
+
+
 def _safe_run(driver, method, params, description="emulation command"):
     """执行 BiDi emulation 命令，不支持时优雅降级。
 
@@ -39,13 +51,7 @@ def _safe_run(driver, method, params, description="emulation command"):
     try:
         return driver.run(method, params)
     except Exception as e:
-        err_str = str(e).lower()
-        if (
-            "unknown command" in err_str
-            or "not supported" in err_str
-            or "unknown method" in err_str
-            or "invalid method" in err_str
-        ):
+        if _is_unsupported_error(e):
             logger.warning("%s 不受当前 Firefox 版本支持: %s", description, e)
             return None
         raise
@@ -290,16 +296,22 @@ def set_network_conditions(driver, offline=False, contexts=None):
 
 
 def set_touch_override(driver, max_touch_points=1, contexts=None, user_contexts=None):
-    """启用/禁用触摸模拟。
+    """调用 BiDi ``emulation.setTouchOverride`` 设置最大触点数。
 
-    规范参数为 maxTouchPoints：
-        - 传 >=1 的整数表示启用触摸并设置最大触点数
-        - 传 None 表示清除覆盖/禁用模拟
+    ``contexts`` 和 ``user_contexts`` 都不传时作用于全局；传 ``None`` 会
+    清除对应作用域的覆盖。当前 Firefox 不支持该命令时返回 ``None``。
 
     Args:
-        max_touch_points: 最大触点数（>=1）或 None
-        contexts: 限定 browsingContext 列表
-        user_contexts: 限定 browser.UserContext 列表
+        driver: browser-level BiDi driver。
+        max_touch_points: ``0..4294967295`` 的整数，或用于重置的 ``None``。
+        contexts: 限定 browsingContext ID 或 ID 列表。
+        user_contexts: 限定 browser.UserContext ID 或 ID 列表。
+
+    Returns:
+        dict | None: 命令结果；当前 Firefox 未实现该命令时为 ``None``。
+
+    Raises:
+        ValueError: 同时传入 ``contexts`` 和 ``user_contexts``。
     """
     if contexts and user_contexts:
         raise ValueError("contexts 和 user_contexts 不能同时传入")
