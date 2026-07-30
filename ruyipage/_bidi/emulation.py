@@ -24,6 +24,28 @@ import logging
 logger = logging.getLogger("ruyipage")
 
 
+def _scope(params, contexts=None, user_contexts=None):
+    if contexts and user_contexts:
+        raise ValueError("contexts and user_contexts cannot both be provided")
+    if contexts:
+        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
+    if user_contexts:
+        params["userContexts"] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
+    return params
+
+
+def _is_unsupported_error(error):
+    err_type = str(getattr(error, "error", "")).lower()
+    err_text = str(error).lower()
+    return (
+        err_type == "unknown command"
+        or "unknown command" in err_text
+        or "not supported" in err_text
+        or "unknown method" in err_text
+        or "invalid method" in err_text
+    )
+
+
 def _safe_run(driver, method, params, description="emulation command"):
     """执行 BiDi emulation 命令，不支持时优雅降级。
 
@@ -39,13 +61,7 @@ def _safe_run(driver, method, params, description="emulation command"):
     try:
         return driver.run(method, params)
     except Exception as e:
-        err_str = str(e).lower()
-        if (
-            "unknown command" in err_str
-            or "not supported" in err_str
-            or "unknown method" in err_str
-            or "invalid method" in err_str
-        ):
+        if _is_unsupported_error(e):
             logger.warning("%s 不受当前 Firefox 版本支持: %s", description, e)
             return None
         raise
@@ -56,166 +72,57 @@ def _safe_run(driver, method, params, description="emulation command"):
 # ---------------------------------------------------------------------------
 
 
-def set_user_agent_override(driver, user_agent, platform=None, contexts=None):
-    """覆盖 User-Agent (FF145+ stable)
-
-    Args:
-        user_agent: UA 字符串
-        platform: 平台标识
-        contexts: 限定 context 列表
-
-    Returns:
-        命令结果，或 None（旧版 Firefox 不支持时）
-    """
+def set_user_agent_override(driver, user_agent, platform=None, contexts=None, user_contexts=None):
     params = {"userAgent": user_agent}
-    if platform:
-        params["platform"] = platform
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setUserAgentOverride",
-        params,
-        "emulation.setUserAgentOverride",
-    )
-
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setUserAgentOverride", params, "emulation.setUserAgentOverride")
 
 def set_geolocation_override(
-    driver, latitude=None, longitude=None, accuracy=None, contexts=None
+    driver, latitude=None, longitude=None, accuracy=None, contexts=None,
+    user_contexts=None, error=None
 ):
-    """覆盖地理位置 (FF139+ stable)
-
-    Args:
-        latitude: 纬度
-        longitude: 经度
-        accuracy: 精度（米）
-        contexts: 限定 context 列表
-    """
-    params = {}
-    if latitude is not None and longitude is not None:
-        coords = {"latitude": latitude, "longitude": longitude}
+    if error is not None:
+        params = {"error": error}
+    elif latitude is None or longitude is None:
+        params = {"coordinates": None}
+    else:
+        coordinates = {"latitude": latitude, "longitude": longitude}
         if accuracy is not None:
-            coords["accuracy"] = accuracy
-        params["coordinates"] = coords
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setGeolocationOverride",
-        params,
-        "emulation.setGeolocationOverride",
-    )
+            coordinates["accuracy"] = accuracy
+        params = {"coordinates": coordinates}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setGeolocationOverride", params, "emulation.setGeolocationOverride")
 
-
-def set_timezone_override(driver, timezone_id, contexts=None):
-    """覆盖时区 (FF144+ stable)
-
-    Args:
-        timezone_id: 时区标识，如 'America/New_York'；传 None 则跳过
-        contexts: 限定 context 列表
-    """
-    if not timezone_id:
-        return
+def set_timezone_override(driver, timezone_id, contexts=None, user_contexts=None):
     params = {"timezone": timezone_id}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver, "emulation.setTimezoneOverride", params, "emulation.setTimezoneOverride"
-    )
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setTimezoneOverride", params, "emulation.setTimezoneOverride")
 
-
-def set_locale_override(driver, locales, contexts=None):
-    """覆盖语言设置 (FF142+ stable)
-
-    也会覆盖 navigator.language(s) (FF146+) 和 Accept-Language 头 (FF147+)。
-
-    Args:
-        locales: 语言字符串或列表，如 'ja-JP' 或 ['ja-JP', 'ja']
-        contexts: 限定 context 列表
-    """
-    # 规范参数名为 locale（单数字符串），取第一个
+def set_locale_override(driver, locales, contexts=None, user_contexts=None):
     locale = locales[0] if isinstance(locales, list) else locales
     params = {"locale": locale}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver, "emulation.setLocaleOverride", params, "emulation.setLocaleOverride"
-    )
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setLocaleOverride", params, "emulation.setLocaleOverride")
 
-
-def set_screen_orientation_override(driver, orientation_type, angle=0, contexts=None):
-    """覆盖屏幕方向 (FF144+ stable)
-
-    Args:
-        orientation_type: 'portrait-primary'/'portrait-secondary'/
-                         'landscape-primary'/'landscape-secondary'
-        angle: 旋转角度 (0/90/180/270)
-        contexts: 限定 context 列表
-    """
-    # 从type中提取natural方向
+def set_screen_orientation_override(driver, orientation_type, angle=0, contexts=None, user_contexts=None):
     natural = "portrait" if "portrait" in orientation_type else "landscape"
-
-    params = {
-        "screenOrientation": {
-            "type": orientation_type,
-            "angle": angle,
-            "natural": natural,
-        }
-    }
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setScreenOrientationOverride",
-        params,
-        "emulation.setScreenOrientationOverride",
-    )
-
+    params = {"screenOrientation": {"type": orientation_type, "natural": natural}}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setScreenOrientationOverride", params, "emulation.setScreenOrientationOverride")
 
 def set_screen_settings_override(
-    driver,
-    width=None,
-    height=None,
-    device_pixel_ratio=None,
-    contexts=None,
-    user_contexts=None,
+    driver, width=None, height=None, device_pixel_ratio=None,
+    contexts=None, user_contexts=None
 ):
-    """覆盖屏幕设置 (FF147+ stable)
-
-    Args:
-        width: 屏幕宽度
-        height: 屏幕高度
-        device_pixel_ratio: 设备像素比
-        contexts: 限定 context 列表
-    """
     if contexts and user_contexts:
         raise ValueError("contexts and user_contexts cannot both be provided")
-    params = {}
-
-    # 构建screenArea对象
-    if width is not None or height is not None:
-        screen_area = {}
-        if width is not None:
-            screen_area["width"] = width
-        if height is not None:
-            screen_area["height"] = height
-        params["screenArea"] = screen_area
-
-    if device_pixel_ratio is not None:
-        params["devicePixelRatio"] = device_pixel_ratio
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    if user_contexts:
-        params["userContexts"] = (
-            user_contexts if isinstance(user_contexts, list) else [user_contexts]
-        )
-    return _safe_run(
-        driver,
-        "emulation.setScreenSettingsOverride",
-        params,
-        "emulation.setScreenSettingsOverride",
-    )
-
+    if width is None or height is None:
+        screen_area = None
+    else:
+        screen_area = {"width": width, "height": height}
+    params = {"screenArea": screen_area}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setScreenSettingsOverride", params, "emulation.setScreenSettingsOverride")
 
 def inject_screen_settings_override(driver, context, width, height, device_pixel_ratio=None):
     """通过 preload script 回退覆盖 screen / DPR。
@@ -270,55 +177,15 @@ def inject_screen_settings_override(driver, context, width, height, device_pixel
 # ---------------------------------------------------------------------------
 
 
-def set_network_conditions(driver, offline=False, contexts=None):
-    """模拟网络条件 (Firefox 未实现)
-
-    Args:
-        offline: 是否离线
-        contexts: 限定 context 列表
-    """
-    # networkConditions.type 必须是字符串 "offline"，而不是布尔值
-    params = {"networkConditions": {"type": "offline" if offline else "online"}}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setNetworkConditions",
-        params,
-        "emulation.setNetworkConditions",
-    )
-
+def set_network_conditions(driver, offline=False, contexts=None, user_contexts=None):
+    params = {"networkConditions": {"type": "offline"} if offline else None}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setNetworkConditions", params, "emulation.setNetworkConditions")
 
 def set_touch_override(driver, max_touch_points=1, contexts=None, user_contexts=None):
-    """启用/禁用触摸模拟。
-
-    规范参数为 maxTouchPoints：
-        - 传 >=1 的整数表示启用触摸并设置最大触点数
-        - 传 None 表示清除覆盖/禁用模拟
-
-    Args:
-        max_touch_points: 最大触点数（>=1）或 None
-        contexts: 限定 browsingContext 列表
-        user_contexts: 限定 browser.UserContext 列表
-    """
-    if contexts and user_contexts:
-        raise ValueError("contexts 和 user_contexts 不能同时传入")
     params = {"maxTouchPoints": max_touch_points}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    if user_contexts:
-        params["userContexts"] = (
-            user_contexts if isinstance(user_contexts, list) else [user_contexts]
-        )
-    return _safe_run(
-        driver, "emulation.setTouchOverride", params, "emulation.setTouchOverride"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Fallback: UA override via preload script（兼容旧版 Firefox < 145）
-# ---------------------------------------------------------------------------
-
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setTouchOverride", params, "emulation.setTouchOverride")
 
 def inject_ua_override(driver, context, user_agent):
     """通过 script.addPreloadScript 注入 UA 覆盖
@@ -359,27 +226,15 @@ def inject_ua_override(driver, context, user_agent):
 # ---------------------------------------------------------------------------
 
 
-def set_media_features_override(driver, features, contexts=None):
-    """覆盖CSS媒体特性 (Firefox可能不支持)
-
-    Args:
-        features: 媒体特性列表
-            [{'name': 'prefers-color-scheme', 'value': 'dark'},
-             {'name': 'prefers-reduced-motion', 'value': 'reduce'}]
-        contexts: 限定context列表
-
-    Returns:
-        命令结果，或None（不支持时）
-    """
+def set_media_features_override(driver, features, contexts=None, user_contexts=None):
     params = {"features": features}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setMediaFeaturesOverride",
-        params,
-        "emulation.setMediaFeaturesOverride",
-    )
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setMediaFeaturesOverride", params, "emulation.setMediaFeaturesOverride")
+
+def set_viewport_meta_override(driver, viewport_meta, contexts=None, user_contexts=None):
+    params = {"viewportMeta": viewport_meta}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setViewportMetaOverride", params, "emulation.setViewportMetaOverride")
 
 
 def set_document_cookie_disabled(driver, disabled=True, contexts=None):
@@ -446,52 +301,19 @@ def set_hardware_concurrency(driver, concurrency, contexts=None):
     )
 
 
-def set_scripting_enabled(driver, enabled=True, contexts=None):
-    """启用/禁用JavaScript执行 (Firefox可能不支持)
+def set_scripting_enabled(driver, enabled=True, contexts=None, user_contexts=None):
+    params = {"enabled": None if enabled else False}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setScriptingEnabled", params, "emulation.setScriptingEnabled")
 
-    Args:
-        enabled: True启用JavaScript，False禁用
-        contexts: 限定context列表
-    """
-    params = {"enabled": enabled}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver, "emulation.setScriptingEnabled", params, "emulation.setScriptingEnabled"
-    )
+def set_scrollbar_type_override(driver, scrollbar_type="overlay", contexts=None, user_contexts=None):
+    value = None if scrollbar_type in (None, "default", "none") else scrollbar_type
+    params = {"scrollbarType": value}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setScrollbarTypeOverride", params, "emulation.setScrollbarTypeOverride")
 
-
-def set_scrollbar_type_override(driver, scrollbar_type="default", contexts=None):
-    """覆盖滚动条类型 (Firefox可能不支持)
-
-    Args:
-        scrollbar_type: 'default' / 'none' / 'overlay'
-        contexts: 限定context列表
-    """
-    params = {"type": scrollbar_type}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setScrollbarTypeOverride",
-        params,
-        "emulation.setScrollbarTypeOverride",
-    )
-
-
-def set_forced_colors_mode_theme_override(driver, mode="none", contexts=None):
-    """强制颜色模式主题覆盖 (Firefox可能不支持)
-
-    Args:
-        mode: 'none' / 'active' / 'light' / 'dark'
-        contexts: 限定context列表
-    """
-    params = {"mode": mode}
-    if contexts:
-        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
-    return _safe_run(
-        driver,
-        "emulation.setForcedColorsModeThemeOverride",
-        params,
-        "emulation.setForcedColorsModeThemeOverride",
-    )
+def set_forced_colors_mode_theme_override(driver, mode="none", contexts=None, user_contexts=None):
+    theme = None if mode in (None, "none", "active") else mode
+    params = {"theme": theme}
+    _scope(params, contexts, user_contexts)
+    return _safe_run(driver, "emulation.setForcedColorsModeThemeOverride", params, "emulation.setForcedColorsModeThemeOverride")

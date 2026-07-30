@@ -43,7 +43,8 @@ def test_start_screencast_sends_optional_params():
             {
                 "context": "ctx-1",
                 "mimeType": "video/webm",
-                "streamOptions": stream_options,
+                "video": stream_options["video"],
+                "audio": stream_options["audio"],
             },
             {},
         )

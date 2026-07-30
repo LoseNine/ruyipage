@@ -95,7 +95,7 @@ def call_function(driver, context, function_declaration, arguments=None,
 
 
 def add_preload_script(driver, function_declaration, arguments=None,
-                       contexts=None, sandbox=None, timeout=None):
+                       contexts=None, sandbox=None, timeout=None, user_contexts=None):
     """注册预加载脚本（每次导航前执行）
 
     Args:
@@ -111,8 +111,12 @@ def add_preload_script(driver, function_declaration, arguments=None,
     if arguments:
         params['arguments'] = [serialize_value(a) if not isinstance(a, dict) else a
                                for a in arguments]
+    if contexts and user_contexts:
+        raise ValueError('contexts and user_contexts cannot both be provided')
     if contexts:
         params['contexts'] = contexts if isinstance(contexts, list) else [contexts]
+    if user_contexts:
+        params['userContexts'] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
     if sandbox:
         params['sandbox'] = sandbox
     return driver.run('script.addPreloadScript', params, timeout=timeout)

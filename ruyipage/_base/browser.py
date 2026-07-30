@@ -633,11 +633,7 @@ class Firefox(object):
                     self._BROWSERS[self._address] = self
                 self._initialized = True
             except Exception:
-                # 初始化失败时移除单例，避免后续复用半初始化对象
-                with self._lock:
-                    if self._BROWSERS.get(self._address) is self:
-                        self._BROWSERS.pop(self._address, None)
-                self._initialized = False
+                self._cleanup_failed_startup()
                 raise
 
     def get_context_nav_lock(self, context_id):
@@ -664,6 +660,59 @@ class Firefox(object):
         self._RESERVED_PORTS.discard(port)
         if self._reserved_port == port:
             self._reserved_port = None
+
+    def _terminate_owned_process_tree(self, timeout=5):
+        process = self._process
+        try:
+            if not process or process.poll() is not None:
+                return
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                import signal
+
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except (AttributeError, OSError, ProcessLookupError):
+                    process.kill()
+            try:
+                process.wait(timeout=timeout)
+            except Exception:
+                pass
+        finally:
+            self._process = None
+
+    def _cleanup_failed_startup(self):
+        if self._driver:
+            try:
+                self._teardown_proxy_auth()
+                self._driver.stop()
+            except Exception:
+                with BrowserBiDiDriver._lock:
+                    BrowserBiDiDriver._BROWSERS.pop(self._address, None)
+            self._driver = None
+
+        if not self._options.is_existing_only:
+            self._terminate_owned_process_tree()
+            if self._auto_profile:
+                import shutil
+
+                shutil.rmtree(self._auto_profile, ignore_errors=True)
+                self._auto_profile = None
+        else:
+            self._process = None
+
+        self._release_reserved_port()
+        with self._lock:
+            for address, browser in list(self._BROWSERS.items()):
+                if browser is self:
+                    self._BROWSERS.pop(address, None)
+        self._initialized = False
 
     def _set_launch_port(self, port):
         """更新 options/address，并同步进程内端口保留。"""
@@ -923,6 +972,14 @@ class Firefox(object):
             force: 是否强制结束进程
         """
         with self._quit_lock:
+            if self._options.is_existing_only:
+                self._detach_on_exit()
+                self._process = None
+                with self._lock:
+                    self._BROWSERS.pop(self._address, None)
+                self._initialized = False
+                return
+
             if self._driver:
                 self._driver.mark_closing()
             try:
@@ -941,16 +998,14 @@ class Firefox(object):
                 self._driver.stop()
                 self._driver = None
 
-            if self._process:
+            if self._process and force:
+                self._terminate_owned_process_tree(timeout=timeout)
+            elif self._process:
                 try:
                     self._process.terminate()
                     self._process.wait(timeout=timeout)
                 except Exception:
-                    if force:
-                        try:
-                            self._process.kill()
-                        except Exception:
-                            pass
+                    pass
                 self._process = None
 
             # 清理临时 profile
@@ -1097,13 +1152,7 @@ class Firefox(object):
         # 这里做一次“重启并重试”兜底，优先提升稳定性（不影响 existing_only 模式）。
         if not self._options.is_existing_only:
             logger.warning("首次启动连接失败，尝试重启 Firefox 后再重试一次...")
-            try:
-                if self._process and self._process.poll() is None:
-                    self._process.kill()
-                    self._process.wait(timeout=5)
-            except Exception:
-                pass
-            self._process = None
+            self._terminate_owned_process_tree()
 
             with self._launch_lock:
                 self._ensure_launch_port_available()

@@ -50,6 +50,7 @@ def test_set_screen_size_injects_js_fallback_when_bidi_is_unsupported():
     assert methods == [
         "browsingContext.getTree",
         "emulation.setScreenSettingsOverride",
+        "browsingContext.setViewport",
         "script.addPreloadScript",
         "script.callFunction",
     ]
@@ -58,7 +59,12 @@ def test_set_screen_size_injects_js_fallback_when_bidi_is_unsupported():
     assert native_override["userContexts"] == ["default"]
     assert "contexts" not in native_override
 
-    preload = calls[2][1]
+    viewport_override = calls[2][1]
+    assert viewport_override["userContexts"] == ["default"]
+    assert viewport_override["viewport"] == {"width": 960, "height": 640}
+    assert viewport_override["devicePixelRatio"] == 2
+
+    preload = calls[3][1]
     assert preload["contexts"] == ["context-1"]
     assert "screen.width" in preload["functionDeclaration"]
     assert "screen.height" in preload["functionDeclaration"]
@@ -66,7 +72,7 @@ def test_set_screen_size_injects_js_fallback_when_bidi_is_unsupported():
     assert "960" in preload["functionDeclaration"]
     assert "640" in preload["functionDeclaration"]
 
-    current_page_call = calls[3][1]
+    current_page_call = calls[4][1]
     assert current_page_call["target"] == {"context": "context-1"}
     assert current_page_call["functionDeclaration"] == preload["functionDeclaration"]
 

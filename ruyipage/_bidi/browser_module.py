@@ -9,7 +9,9 @@ def close(driver):
     return driver.run("browser.close")
 
 
-def create_user_context(driver):
+def create_user_context(
+    driver, accept_insecure_certs=None, proxy=None, unhandled_prompt_behavior=None
+):
     """创建用户上下文（类似容器标签页）。
 
     Returns:
@@ -19,7 +21,16 @@ def create_user_context(driver):
         - 创建隔离的浏览器 user context
         - 在测试中模拟不同容器环境
     """
-    return driver.run("browser.createUserContext")
+    params = {}
+    if accept_insecure_certs is not None:
+        params["acceptInsecureCerts"] = accept_insecure_certs
+    if proxy is not None:
+        params["proxy"] = proxy
+    if unhandled_prompt_behavior is not None:
+        params["unhandledPromptBehavior"] = unhandled_prompt_behavior
+    if not params:
+        return driver.run("browser.createUserContext")
+    return driver.run("browser.createUserContext", params)
 
 
 def get_user_contexts(driver):
@@ -137,8 +148,12 @@ def set_download_behavior(
 
     params = {}
 
-    behavior_text = str(behavior or "").strip()
-    if behavior_text in ("allow", "allowAndOpen", "allowed"):
+    behavior_text = None if behavior is None else str(behavior).strip()
+    if behavior_text is None:
+        download_behavior = None
+    elif behavior_text in ("allow", "allowAndOpen", "allowed"):
+        if not download_path:
+            raise ValueError("download_path is required when behavior is allow")
         download_behavior = {"type": "allowed"}
         if download_path:
             destination_folder = os.path.normpath(

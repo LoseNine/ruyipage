@@ -35,7 +35,7 @@ def end(driver):
     return driver.run("session.end")
 
 
-def subscribe(driver, events, contexts=None):
+def subscribe(driver, events, contexts=None, user_contexts=None):
     """订阅事件
 
     Args:
@@ -47,8 +47,12 @@ def subscribe(driver, events, contexts=None):
         {'subscription': str}  订阅 ID
     """
     params = {"events": events if isinstance(events, list) else [events]}
+    if contexts and user_contexts:
+        raise ValueError("contexts and user_contexts cannot both be provided")
     if contexts:
         params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
+    if user_contexts:
+        params["userContexts"] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
     return driver.run("session.subscribe", params)
 
 
@@ -126,6 +130,4 @@ def unsubscribe(driver, events=None, contexts=None, subscription=None):
     else:
         if events:
             params["events"] = events if isinstance(events, list) else [events]
-        if contexts:
-            params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
     return driver.run("session.unsubscribe", params)

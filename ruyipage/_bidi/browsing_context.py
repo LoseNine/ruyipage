@@ -272,79 +272,59 @@ def locate_nodes(
 
 
 def set_viewport(
-    driver, context, width=None, height=None, device_pixel_ratio=None, timeout=None
+    driver, context=None, width=None, height=None, device_pixel_ratio=None,
+    timeout=None, user_contexts=None
 ):
-    """设置视口大小。
-
-    Args:
-        context: 目标 browsingContext ID。
-            常见值：当前页面的 ``page.tab_id``。
-        width: 视口宽度。
-            单位：CSS 像素。
-            常见值：``800``、``1280``、``375``。
-        height: 视口高度。
-            单位：CSS 像素。
-            常见值：``600``、``720``、``667``。
-        device_pixel_ratio: 设备像素比。
-            常见值：``1``、``2``、``3``。
-
-    Returns:
-        dict: BiDi 命令返回结果，通常为空字典。
-
-    适用场景：
-        - 调整桌面视口大小
-        - 配合移动端模拟设置 viewport + DPR
-    """
-    params = {"context": context}
-    if width is not None and height is not None:
+    params = {}
+    if context is not None and user_contexts:
+        raise ValueError("context and user_contexts cannot both be provided")
+    if context is not None:
+        params["context"] = context
+    if user_contexts:
+        params["userContexts"] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
+    if (width is None) != (height is None):
+        raise ValueError("width and height must be provided together")
+    if width is not None:
         params["viewport"] = {"width": width, "height": height}
     if device_pixel_ratio is not None:
         params["devicePixelRatio"] = device_pixel_ratio
     return driver.run("browsingContext.setViewport", params, timeout=timeout)
 
 
-def set_bypass_csp(driver, context, enabled=True):
-    """设置是否绕过内容安全策略（CSP）。
-
-    Args:
-        context: 目标 browsingContext ID。
-            常见值：当前页面的 ``page.tab_id``。
-        enabled: 是否启用绕过。
-            常见值：``True`` 启用、``False`` 禁用。
-
-    Returns:
-        dict: BiDi 命令返回结果，通常为空字典。
-
-    适用场景：
-        - 需要验证浏览器是否支持标准 ``browsingContext.setBypassCSP``
-        - 不希望退回 JS 兼容逻辑，而是直接判断标准命令可用性
-
-    说明：
-        - 当前 Firefox 若未实现该命令，调用方应拿到异常并标记为“不支持”。
-        - 这里不再把 ``unknown command`` 吞成 ``None``，避免示例误判为成功。
-    """
-    return driver.run(
-        "browsingContext.setBypassCSP", {"context": context, "enabled": enabled}
-    )
+def set_bypass_csp(
+    driver, context=None, enabled=None, bypass=None, contexts=None, user_contexts=None
+):
+    if bypass is None:
+        bypass = True if enabled else None
+    if context is not None:
+        if contexts or user_contexts:
+            raise ValueError("context cannot be combined with contexts or user_contexts")
+        contexts = [context]
+    if contexts and user_contexts:
+        raise ValueError("contexts and user_contexts cannot both be provided")
+    params = {"bypass": bypass}
+    if contexts:
+        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
+    if user_contexts:
+        params["userContexts"] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
+    return driver.run("browsingContext.setBypassCSP", params)
 
 
-def start_screencast(driver, context, mime_type=None, stream_options=None):
-    """开始录制指定顶层浏览上下文的 screencast。
-
-    Args:
-        context: 目标 top-level browsingContext ID。
-        mime_type: 可选输出 MIME 类型，例如 ``"video/webm"``。
-        stream_options: 可选媒体流配置。
-            结构示例：``{"video": {"width": 1280, "height": 720, "frameRate": 30}, "audio": False}``。
-
-    Returns:
-        dict: ``{"screencast": str, "path": str}``。
-    """
+def start_screencast(
+    driver, context, mime_type=None, video=None, audio=None, stream_options=None
+):
     params = {"context": context}
     if mime_type is not None:
         params["mimeType"] = mime_type
     if stream_options is not None:
-        params["streamOptions"] = stream_options
+        if video is not None or audio is not None:
+            raise ValueError("stream_options cannot be combined with video or audio")
+        video = stream_options.get("video")
+        audio = stream_options.get("audio")
+    if video is not None:
+        params["video"] = video
+    if audio is not None:
+        params["audio"] = audio
     return driver.run("browsingContext.startScreencast", params)
 
 

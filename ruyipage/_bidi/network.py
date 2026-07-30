@@ -109,48 +109,42 @@ def set_cache_behavior(driver, behavior, contexts=None):
     return driver.run('network.setCacheBehavior', params)
 
 
-def set_extra_headers(driver, headers, contexts=None):
-    """设置额外请求头（Firefox 私有扩展，非 W3C 标准）"""
-    params = {'headers': headers}
+def set_extra_headers(driver, headers, contexts=None, user_contexts=None):
+    params = {"headers": headers}
+    if contexts and user_contexts:
+        raise ValueError("contexts and user_contexts cannot both be provided")
     if contexts:
-        params['contexts'] = contexts if isinstance(contexts, list) else [contexts]
-    return driver.run('network.setExtraHeaders', params)
+        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
+    if user_contexts:
+        params["userContexts"] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
+    return driver.run("network.setExtraHeaders", params)
 
-
-def add_data_collector(driver, events, contexts=None, max_encoded_data_size=10485760, data_types=None):
-    """注册数据收集器，收集请求/响应体数据
-
-    Args:
-        events: 收集阶段列表，如 ['beforeRequestSent', 'responseCompleted']
-        contexts: 限定 context 列表
-        max_encoded_data_size: 最大编码数据大小（字节），默认 10MB
-        data_types: 数据类型列表，如 ['body']
-    Returns:
-        {'collector': str}  收集器 ID
-    """
+def add_data_collector(driver, events=None, contexts=None, max_encoded_data_size=10485760, data_types=None, collector_type="blob", user_contexts=None):
     params = {
-        'events': events,
-        'maxEncodedDataSize': max_encoded_data_size,
-        'dataTypes': data_types if data_types else ['request', 'response'],
+        "dataTypes": data_types if data_types else ["request", "response"],
+        "maxEncodedDataSize": max_encoded_data_size,
+        "collectorType": collector_type,
     }
+    if contexts and user_contexts:
+        raise ValueError("contexts and user_contexts cannot both be provided")
     if contexts:
-        params['contexts'] = contexts if isinstance(contexts, list) else [contexts]
-    return driver.run('network.addDataCollector', params)
-
+        params["contexts"] = contexts if isinstance(contexts, list) else [contexts]
+    if user_contexts:
+        params["userContexts"] = user_contexts if isinstance(user_contexts, list) else [user_contexts]
+    return driver.run("network.addDataCollector", params)
 
 def remove_data_collector(driver, collector_id):
     """移除数据收集器"""
     return driver.run('network.removeDataCollector', {'collector': collector_id})
 
 
-def get_data(driver, collector_id, request_id, data_type='response'):
-    """获取收集器收集的数据"""
-    return driver.run('network.getData', {
-        'collector': collector_id,
-        'request': request_id,
-        'dataType': data_type,
-    })
-
+def get_data(driver, collector_id, request_id, data_type="response", disown=False):
+    params = {"request": request_id, "dataType": data_type}
+    if collector_id is not None:
+        params["collector"] = collector_id
+    if disown:
+        params["disown"] = True
+    return driver.run("network.getData", params)
 
 def disown_data(driver, collector_id, request_id, data_type='response'):
     """释放收集器持有的数据（释放内存）"""

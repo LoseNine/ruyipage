@@ -52,6 +52,12 @@ from ._units.script_tools import (
     ScriptResult,
     PreloadScript,
 )
+from ._units.emulation import (
+    TouchCapability,
+    TouchOverrideResult,
+    TouchStartupOnlyError,
+    TouchUnsupportedError,
+)
 from ._units.tracer import FailureSnapshot, TraceEntry
 from .errors import (
     RuyiPageError,
@@ -557,6 +563,10 @@ __all__ = [
     "ScriptRemoteValue",
     "ScriptResult",
     "PreloadScript",
+    "TouchCapability",
+    "TouchOverrideResult",
+    "TouchUnsupportedError",
+    "TouchStartupOnlyError",
     "FailureSnapshot",
     "TraceEntry",
     # 异常
