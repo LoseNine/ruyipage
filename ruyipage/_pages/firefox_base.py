@@ -3406,6 +3406,13 @@ class FirefoxBase(BasePage):
     @property
     def url(self) -> str:
         """当前 URL"""
+        result = bidi_context.get_tree(
+            self._driver._browser_driver,
+            max_depth=0,
+        )
+        for context in result.get("contexts", []):
+            if context.get("context") == self._context_id:
+                return context.get("url", "")
         return self.run_js("location.href") or ""
 
     @property
