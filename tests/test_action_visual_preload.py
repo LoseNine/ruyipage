@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest import mock
 
+import ruyipage._base.browser as browser_module
 from ruyipage._base.browser import Firefox, create_browser_from_probe_info
 from ruyipage._configs.firefox_options import FirefoxOptions
 from ruyipage._pages.firefox_base import FirefoxBase
@@ -180,3 +181,85 @@ def test_context_init_retries_browser_owned_baseline():
     page._init_context(fake_browser, "context-1")
 
     fake_browser._ensure_baseline_preload.assert_called_once_with()
+
+
+def test_reconnect_registers_baseline_for_the_new_session(monkeypatch):
+    class ReconnectDriver(RecordingDriver):
+        def __init__(self, address):
+            super().__init__([{"script": "reconnected-baseline"}])
+            self.address = address
+            self.session_id = ""
+
+        def start(self, _url):
+            return None
+
+        def stop(self):
+            return None
+
+    browser = make_browser(session_id="old-session")
+    browser._baseline_preload_script_id = "old-baseline"
+    browser._baseline_preload_session_id = "old-session"
+    browser._address = "127.0.0.1:65522"
+    browser._driver.stop = mock.Mock()
+    browser._teardown_proxy_auth = mock.Mock()
+    browser._subscribe_events = mock.Mock()
+    browser._setup_proxy_auth = mock.Mock()
+    browser._refresh_tabs = mock.Mock()
+    monkeypatch.setattr(browser_module, "BrowserBiDiDriver", ReconnectDriver)
+    monkeypatch.setattr(
+        browser_module,
+        "get_bidi_ws_url",
+        lambda _host, _port, timeout: "ws://test",
+    )
+    browser._create_session = lambda: browser._activate_session(
+        {"sessionId": "new-session"}
+    )
+
+    browser.reconnect()
+
+    assert browser._session_id == "new-session"
+    assert browser._baseline_preload_session_id == "new-session"
+    assert browser._baseline_preload_script_id == "reconnected-baseline"
+    assert len(browser._driver.calls) == 1
+
+
+def make_visual_page(enabled):
+    driver = RecordingDriver([{"script": "visual-preload"}])
+    browser = SimpleNamespace(
+        options=SimpleNamespace(action_visual_enabled=enabled),
+        _baseline_preload_script_id="baseline-preload",
+        _baseline_preload_session_id="session-1",
+    )
+    page = FirefoxBase()
+    page._browser = browser
+    page._driver = SimpleNamespace(_browser_driver=driver)
+    page.run_js = mock.Mock()
+    return page, browser, driver
+
+
+def test_disabled_action_visual_has_no_visual_preload_or_evaluation():
+    page, browser, driver = make_visual_page(False)
+
+    page._maybe_enable_action_visual()
+
+    assert driver.calls == []
+    assert not hasattr(browser, "_action_visual_global_preload_script_id")
+    page.run_js.assert_not_called()
+
+
+def test_enabled_action_visual_keeps_visual_preload_separate():
+    page, browser, driver = make_visual_page(True)
+    visual_script = page._get_action_visual_script()
+
+    page._maybe_enable_action_visual()
+
+    assert browser._baseline_preload_script_id == "baseline-preload"
+    assert browser._action_visual_global_preload_script_id == "visual-preload"
+    assert (
+        browser._action_visual_global_preload_script_id
+        != browser._baseline_preload_script_id
+    )
+    method, params, _kwargs = driver.calls[0]
+    assert method == "script.addPreloadScript"
+    assert params == {"functionDeclaration": visual_script}
+    page.run_js.assert_called_once_with(f"({visual_script})()", as_expr=True)
