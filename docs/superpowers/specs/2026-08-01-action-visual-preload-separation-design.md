@@ -29,12 +29,12 @@ whether the browser has an active BiDi preload.
 
 ## Considered Approaches
 
-### 1. Separate baseline and visual behavior in ruyiPage (selected)
+### 1. Separate session baseline and visual behavior in ruyiPage (selected)
 
-Always register one harmless preload for the browser session. When
-`action_visual` is enabled, use the existing visualization preload and inject
-the current document. When it is disabled, register an empty function and do
-not create `window.__ruyiAV` or any `__ruyi_av_*` DOM nodes.
+Always register one harmless preload owned by the current browser session.
+Keep the existing visualization preload separate and register it only when
+`action_visual` is enabled. Disabled mode does not create `window.__ruyiAV` or
+any `__ruyi_av_*` DOM nodes.
 
 This is the smallest change that matches the observed causal boundary and
 preserves current visualization behavior across navigation.
@@ -53,51 +53,84 @@ visual output and that the default configuration retain the expected signal.
 
 ## Design
 
-`FirefoxBase._maybe_enable_action_visual()` will always ensure that the browser
-has one global preload script ID:
+The `Firefox` browser object will own a dedicated baseline preload lifecycle:
 
-- With visualization disabled, it registers `() => {}` and returns without
-  evaluating the visualization script in the current document.
-- With visualization enabled, it registers the existing action visual script
-  and evaluates it in the current document, preserving current behavior.
-- The browser-level script ID continues to prevent duplicate registration when
-  several tabs or contexts share the same browser.
+- A baseline script ID and its BiDi session ID are stored independently from
+  `_action_visual_global_preload_script_id`.
+- A browser-level lock protects the session check and registration operation.
+- Successful session creation invokes one common activation hook that ensures
+  `() => {}` is registered for that session.
+- Context initialization asks the same browser-owned helper to ensure the
+  baseline, providing a retry point while the lock and session token keep
+  successful registrations idempotent.
+- Reconnect creates a new session ID, so the hook registers a fresh baseline
+  instead of trusting the stale ID from the previous session.
+- Browser objects created from a retained probe session run the same baseline
+  setup before they are returned.
+
+`FirefoxBase._maybe_enable_action_visual()` keeps its current option guard:
+
+- With visualization disabled, it returns without registering or evaluating
+  the visual script.
+- With visualization enabled, it registers the existing action visual preload
+  and evaluates it in the current document, preserving navigation behavior.
+- Its script ID remains exclusively associated with the visual preload.
 
 Navigation reinjection remains guarded by `action_visual_enabled`, so the
 disabled path never adds visual globals or DOM nodes.
 
-No public API or configuration schema changes are required.
+`action_visual` is explicitly a browser-startup option. Runtime mutation of
+the retained `FirefoxOptions` object is not a supported enable/disable API;
+this matches the existing construction and documentation pattern. No public
+API or configuration schema changes are required.
 
 ## Error Handling
 
-Preload registration keeps the existing best-effort behavior: BiDi failures
-are logged at debug level and do not prevent page construction. Disabled
-visualization must not execute the visual script even if registration fails.
+Baseline registration and visual injection use separate error boundaries.
+Baseline setup retries once when BiDi raises or returns an empty script ID. If
+both attempts fail, the browser stores no success token and emits a warning so
+the degraded invariant is observable and a later session/context setup can
+retry. A baseline failure does not suppress enabled-mode current-document
+visualization.
+
+Visual preload and current-document injection retain their existing
+best-effort debug logging. Disabled visualization does not execute the visual
+script regardless of baseline outcome.
 
 ## Testing
 
 Automated regression tests will prove that:
 
-1. Disabled visualization registers exactly one empty global preload.
-2. Disabled visualization does not evaluate the visual script in the current
-   document.
-3. Enabled visualization registers and evaluates the existing visual script.
-4. Repeated initialization across contexts does not duplicate the preload.
-5. Existing action visual tests remain green.
+1. Session activation registers exactly one empty baseline preload.
+2. Repeated and concurrent setup for one session does not duplicate it.
+3. A changed session ID registers a new baseline after reconnect.
+4. Empty IDs and BiDi failures are retried, warning-logged, and not recorded as
+   success.
+5. Disabled visualization does not register or evaluate the visual script.
+6. Enabled visualization registers and evaluates the existing visual script.
+7. Existing action visual and protocol-conformance tests remain green.
 
 A live A/B verification will launch fresh browser profiles with
 `action_visual=False` and `action_visual=True`, then assert:
 
 - the target XPath reports `Not detected` in both runs;
+- the containing row label is still `Developer Tools` before its value is
+  interpreted;
+- the separate `Bot` row reports `Not detected` in both runs;
 - `window.__ruyiAV` and `__ruyi_av_*` nodes are absent when disabled;
 - `window.__ruyiAV` and the visual nodes are present when enabled.
+
+A no-baseline negative control will also be run against the previously
+released revision to confirm that the same environment still produces
+`Developer Tools: Yes` without an active preload.
 
 The live third-party check is verification evidence rather than a committed
 test because its server-side model and network availability are external.
 
 ## Scope
 
-This change is limited to action visual preload registration and focused
+This change is limited to browser-session baseline preload registration,
+action visual lifecycle separation, the startup-option contract, and focused
 tests. It does not modify fingerprint profile generation, browser binaries,
 XPath picker behavior, or unrelated user changes already present in the work
 tree.
