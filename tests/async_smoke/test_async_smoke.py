@@ -19,6 +19,14 @@ pytestmark = [pytest.mark.smoke, pytest.mark.asyncio]
 # ── 启动测试（对标 test_startup.py）────────────────────────────────────────
 
 
+async def test_async_launch_starts_in_script_accessible_context(
+    async_launched_page,
+):
+    """启动后无需 system-access 权限即可直接读取页面属性。"""
+    assert (await async_launched_page.get_url()) == "about:blank"
+    assert (await async_launched_page.get_title()) == ""
+
+
 async def test_async_launch_and_navigate(async_page):
     """对标 test_launch_entry_works：异步启动 + 导航到 about:blank。"""
     url = await async_page.get_url()

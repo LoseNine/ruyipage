@@ -16,18 +16,24 @@ ENV_FIREFOX_PATH = "RUYIPAGE_TEST_FIREFOX_PATH"
 
 
 @pytest_asyncio.fixture
-async def async_page():
-    """创建一个异步页面实例，测试结束时清理。"""
+async def async_launched_page():
+    """创建一个尚未执行用户导航的异步页面实例。"""
     page = await launch(
         headless=False,
         browser_path=os.environ.get(ENV_FIREFOX_PATH) or None,
     )
-    await page.get("about:blank")
     yield page
     try:
         await page.quit()
     except Exception:
         pass
+
+
+@pytest_asyncio.fixture
+async def async_page(async_launched_page):
+    """创建一个已导航到空白页的异步页面实例。"""
+    await async_launched_page.get("about:blank")
+    yield async_launched_page
 
 
 @pytest.fixture

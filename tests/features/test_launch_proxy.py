@@ -73,6 +73,35 @@ def test_launch_forwards_user_dir_to_options(tmp_path):
     assert opts.profile_path == str(tmp_path)
 
 
+def test_launch_uses_script_accessible_blank_start_page():
+    created_opts = {}
+
+    def fake_page(opts):
+        created_opts["opts"] = opts
+        return object()
+
+    with mock.patch("ruyipage.FirefoxPage", side_effect=fake_page):
+        launch()
+
+    command = created_opts["opts"].build_command()
+    assert "about:blank" in command
+    assert "-remote-allow-system-access" not in command
+    assert "--remote-allow-system-access" not in command
+
+
+def test_private_launch_keeps_firefox_private_start_page():
+    created_opts = {}
+
+    def fake_page(opts):
+        created_opts["opts"] = opts
+        return object()
+
+    with mock.patch("ruyipage.FirefoxPage", side_effect=fake_page):
+        launch(private=True)
+
+    assert "about:blank" not in created_opts["opts"].build_command()
+
+
 def test_write_prefs_uses_socks5_proxy_from_fpfile(tmp_path):
     fpfile = tmp_path / "fp.txt"
     fpfile.write_text(

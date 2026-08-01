@@ -275,6 +275,9 @@ def launch(
         failure_snapshot=failure_snapshot,
         snapshot_dir=snapshot_dir,
     )
+    # Firefox 155 protects about:home from normal BiDi script evaluation.
+    if not private:
+        opts.set_argument("about:blank")
     resolved_browser_path = resolve_firefox_path(browser_path)
     if resolved_browser_path:
         opts.set_browser_path(resolved_browser_path)
