@@ -164,6 +164,9 @@ class FirefoxBase(BasePage):
         self._context_id = context_id
         self._driver = ContextDriver(browser.driver, context_id)
         self._load_mode = browser.options.load_mode
+        ensure_baseline = getattr(browser, "_ensure_baseline_preload", None)
+        if callable(ensure_baseline):
+            ensure_baseline()
         self._maybe_enable_xpath_picker()
         self._maybe_enable_action_visual()
         self._maybe_enable_trace()

@@ -229,7 +229,11 @@ def create_browser_from_probe_info(info):
     browser._proxy_auth_intercept_id = None
     browser._proxy_auth_subscription_id = None
     browser._xpath_picker_last_reinject = {}
+    browser._baseline_preload_script_id = None
+    browser._baseline_preload_session_id = None
+    browser._baseline_preload_lock = threading.Lock()
     browser._atexit_registered = False
+    browser._ensure_baseline_preload()
     browser._register_exit_cleanup()
     browser._initialized = True
     return browser
@@ -628,6 +632,9 @@ class Firefox(object):
             self._proxy_auth_intercept_id = None
             self._proxy_auth_subscription_id = None
             self._xpath_picker_last_reinject = {}
+            self._baseline_preload_script_id = None
+            self._baseline_preload_session_id = None
+            self._baseline_preload_lock = threading.Lock()
             self._atexit_registered = False
 
             try:
@@ -1649,6 +1656,13 @@ class Firefox(object):
         except Exception as e:
             raise BrowserLaunchError("启动 Firefox 失败: {}".format(e))
 
+    def _activate_session(self, result):
+        """Record a new BiDi session and install its baseline preload."""
+        self._session_id = result.get("sessionId", "")
+        self._driver.session_id = self._session_id
+        self._owns_session = True
+        self._ensure_baseline_preload()
+
     def _create_session(self):
         """创建 BiDi 会话
 
@@ -1676,9 +1690,7 @@ class Firefox(object):
                     {},
                     user_prompt_handler=self._options.user_prompt_handler,
                 )
-                self._session_id = result.get("sessionId", "")
-                self._driver.session_id = self._session_id
-                self._owns_session = True
+                self._activate_session(result)
                 logger.info("BiDi 会话已创建: %s", self._session_id)
                 return
             except Exception as e:
@@ -1701,9 +1713,7 @@ class Firefox(object):
                     {},
                     user_prompt_handler=self._options.user_prompt_handler,
                 )
-                self._session_id = result.get("sessionId", "")
-                self._driver.session_id = self._session_id
-                self._owns_session = True
+                self._activate_session(result)
                 logger.info("BiDi 会话已重新创建: %s", self._session_id)
                 return
             except Exception as e:
@@ -1739,9 +1749,7 @@ class Firefox(object):
                             {},
                             user_prompt_handler=self._options.user_prompt_handler,
                         )
-                        self._session_id = result.get("sessionId", "")
-                        self._driver.session_id = self._session_id
-                        self._owns_session = True
+                        self._activate_session(result)
                         logger.info(
                             "孤儿 session 已清理，新会话已创建: %s",
                             self._session_id,
