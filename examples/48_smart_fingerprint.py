@@ -15,13 +15,14 @@
 再在 `FirefoxPage(opts)` 之后调用 `ctx.apply_emulation(page)`。默认路径不设置
 外部窗口。
 
-  1) 通过代理探测出口 IP → 国家 / 时区 / 经纬度（5 数据源自动回退）
-  2) 可选 IPv6 探测（失败则省略，绝不伪造）
+  1) 通过代理探测出口 IP → 国家 / 时区 / 经纬度（10 数据源自动回退）
+  2) 可选 IPv6 探测（仅富化诊断信息，失败则省略，绝不伪造）
   3) 自动匹配该国的语言 / Accept-Language / 微软语音配置
   4) 随机抽取 22 套 Windows 真机硬件特征之一
-  5) 拼装 Firefox 151 ±2 UA + 随机 canvas 种子
+  5) 按实际 Firefox 主版本拼装 UA + 独立 Canvas/Audio 种子
   6) 写出 fpfile.txt（内核 key:value 格式，原子写入，不再写 width/height）
-  7) 自动配置 FirefoxOptions：proxy / user_dir / fpfile；不会自动设置外部窗口
+  7) 自动配置 FirefoxOptions：proxy / user_dir / fpfile / about:blank 启动页；
+     不会自动设置外部窗口
      `set_window_size_on_opts` 仅为兼容保留且已忽略
 
 标准顺序是：`ctx = opts.smart_fingerprint(...)` →
@@ -103,7 +104,7 @@ def main():
         print("[FAIL] 国家不匹配: 实际={} 期望={}".format(e.actual, e.required))
         return
     except GeoError as e:
-        # 5 个 geo 数据源全部失败
+        # 10 个 geo 数据源全部失败
         print("[FAIL] geo 探测全部失败: {}".format(e))
         return
 

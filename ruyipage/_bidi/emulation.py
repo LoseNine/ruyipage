@@ -79,7 +79,8 @@ def set_user_agent_override(driver, user_agent, platform=None, contexts=None, us
 
 def set_geolocation_override(
     driver, latitude=None, longitude=None, accuracy=None, contexts=None,
-    user_contexts=None, error=None
+    user_contexts=None, error=None, altitude=None, altitude_accuracy=None,
+    heading=None, speed=None
 ):
     if error is not None:
         params = {"error": error}
@@ -89,6 +90,14 @@ def set_geolocation_override(
         coordinates = {"latitude": latitude, "longitude": longitude}
         if accuracy is not None:
             coordinates["accuracy"] = accuracy
+        if altitude is not None:
+            coordinates["altitude"] = altitude
+        if altitude_accuracy is not None:
+            coordinates["altitudeAccuracy"] = altitude_accuracy
+        if heading is not None:
+            coordinates["heading"] = heading
+        if speed is not None:
+            coordinates["speed"] = speed
         params = {"coordinates": coordinates}
     _scope(params, contexts, user_contexts)
     return _safe_run(driver, "emulation.setGeolocationOverride", params, "emulation.setGeolocationOverride")

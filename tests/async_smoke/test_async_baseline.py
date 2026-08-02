@@ -144,6 +144,18 @@ class TestMethodSignatures:
                 "AsyncFirefoxBase.{} should be a coroutine function".format(name)
             )
 
+    def test_geolocation_optional_fields_remain_keyword_only(self):
+        from ruyipage._async._generated import AsyncFirefoxBase
+
+        signature = inspect.signature(AsyncFirefoxBase.set_geolocation)
+        for name in (
+            "altitude",
+            "altitude_accuracy",
+            "heading",
+            "speed",
+        ):
+            assert signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+
     def test_element_methods_are_coroutines(self):
         from ruyipage._async._generated import AsyncFirefoxElement
 

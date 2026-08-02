@@ -14,12 +14,14 @@ Provide a single one-stop API ``apply_smart_fingerprint(opts, ...)`` that:
    data sources (geojs.io, ipapi.co, ipwho.is, ip-api.com, ipinfo.io, etc.).
 2. Optionally enforces a country-code requirement (``require_country``).
 3. Picks one of 22 real Windows hardware profiles (NVIDIA / AMD / Intel),
-   composes a Firefox 151 ±2 user-agent and a per-session canvas seed.
+   composes a UA matching the actual Firefox major version and per-session
+   Canvas / Audio seeds.
 4. Maps the country code to language / Accept-Language / speech voices.
 5. Writes a ``fpfile.txt`` that strictly follows the firefox-fingerprintBrowser
    field schema (``key:value``) to the chosen userdir, without ``width`` / ``height`` entries.
 6. Configures the supplied ``FirefoxOptions`` instance (proxy / userdir /
-   fpfile). ``set_window_size_on_opts`` is retained as a deprecated no-op;
+   fpfile / script-accessible ``about:blank`` startup page).
+   ``set_window_size_on_opts`` is retained as a deprecated no-op;
    fingerprint screen dimensions are never mapped to the outer window.
 
 Public API
@@ -96,22 +98,32 @@ Typical usage
     page = FirefoxPage(opts)
     ctx.apply_emulation(page)        # returns a map containing ``screen``
     page.get("https://browserleaks.com/webgl")
+
+    # AsyncFirefoxPage:
+    # result = await ctx.apply_emulation_async(async_page)
 """
 
 from __future__ import annotations
 
 import dataclasses
 import functools
+import inspect
+import ipaddress
 import json
+import math
 import os
 import random
 import re
 import string
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Awaitable, Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
+
+
+DEFAULT_GEOLOCATION_ACCURACY = 15000
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +139,7 @@ class FingerprintError(Exception):
 
 
 class FingerprintConfigError(FingerprintError):
-    """The ``fingerprints.json`` or ``region_locales.json`` file is invalid.
+    """A bundled fingerprint, locale, or IANA timezone JSON file is invalid.
 
     Raised by the JSON loader when a schema constraint is violated:
     missing field, wrong type, length mismatch in speech arrays, etc.
@@ -139,7 +151,7 @@ class GeoError(FingerprintError):
     """Every geo data source failed to return a usable response.
 
     The exception ``message`` includes a brief failure summary for each
-    of the five sources tried, so you can tell whether it was a network
+    of the ten sources tried, so you can tell whether it was a network
     issue, a captcha rate-limit, a parse error, or a missing field.
     """
 
@@ -212,6 +224,22 @@ class GeoInfo:
 
 
 @dataclass(frozen=True)
+class GeolocationProfile:
+    """Validated geolocation state coordinated across fpfile and BiDi."""
+
+    enabled: bool
+    latitude: float
+    longitude: float
+    accuracy: float
+    altitude: Optional[float] = None
+    altitude_accuracy: Optional[float] = None
+    heading: Optional[float] = None
+    speed: Optional[float] = None
+    timestamp: Any = "now"
+    permission: str = "granted"
+
+
+@dataclass(frozen=True)
 class WebGLProfile:
     """Full set of WebGL fields aligned 1:1 with the kernel schema."""
 
@@ -260,6 +288,9 @@ class CountryProfile:
     speech_default_lang: str
 
 
+_AUDIO_SEED_UNSET = object()
+
+
 @dataclass(frozen=True)
 class FingerprintProfile:
     """Composite per-session fingerprint produced by :func:`pick_fingerprint`."""
@@ -272,6 +303,18 @@ class FingerprintProfile:
     canvas_seed: int
     language_primary: str
     accept_language: str
+    audio_seed: Optional[int] = cast(Optional[int], _AUDIO_SEED_UNSET)
+
+    def __post_init__(self) -> None:
+        if self.audio_seed is _AUDIO_SEED_UNSET:
+            derived = 1
+            if isinstance(self.canvas_seed, int) and not isinstance(
+                self.canvas_seed, bool
+            ):
+                derived = (
+                    self.canvas_seed ^ 0x9E3779B97F4A7C15
+                ) & ((1 << 64) - 1)
+            object.__setattr__(self, "audio_seed", derived or 1)
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +350,15 @@ def default_region_locales_path() -> str:
         return str(files("ruyipage._fingerprint.data") / "region_locales.json")
     except Exception:
         return os.path.join(_module_data_dir(), "region_locales.json")
+
+
+def _default_iana_timezones_path() -> str:
+    """Return the bundled Firefox ICU/IANA timezone index path."""
+    try:
+        from importlib.resources import files
+        return str(files("ruyipage._fingerprint.data") / "iana_timezones.json")
+    except Exception:
+        return os.path.join(_module_data_dir(), "iana_timezones.json")
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +461,7 @@ def _load_region_locales(path: str) -> Dict[str, Any]:
     * Top-level ``countries`` must contain ``_default``.
     * For every country: ``language`` / ``language_primary`` /
       ``accept_language`` are non-empty strings.
+    * ``language`` and ``accept_language`` contain the same ordered tags.
     * ``speech.local`` and ``speech.local_langs`` have equal length.
     * ``speech.remote`` and ``speech.remote_langs`` have equal length.
     * ``speech.default_name`` appears in either ``local`` or ``remote``.
@@ -444,6 +497,16 @@ def _load_region_locales(path: str) -> Dict[str, Any]:
                 raise FingerprintConfigError(
                     "region_locales.json: %r missing/invalid %r" % (cc, k)
                 )
+        language_tags = [part.strip() for part in entry["language"].split(",")]
+        accept_tags = [
+            part.split(";", 1)[0].strip()
+            for part in entry["accept_language"].split(",")
+        ]
+        if language_tags != accept_tags:
+            raise FingerprintConfigError(
+                "region_locales.json: %r language/accept_language tags mismatch"
+                % cc
+            )
         speech = entry.get("speech") or {}
         local = speech.get("local") or []
         local_langs = speech.get("local_langs") or []
@@ -464,6 +527,31 @@ def _load_region_locales(path: str) -> Dict[str, Any]:
                 % (cc, default_name)
             )
     return data
+
+
+@functools.lru_cache(maxsize=2)
+def _load_iana_timezones(path: str) -> frozenset:
+    """Load the timezone IDs accepted by the bundled Firefox ICU data."""
+    if not os.path.exists(path):
+        raise FingerprintConfigError("iana_timezones.json not found: " + path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise FingerprintConfigError(
+            "iana_timezones.json parse failed: {}".format(e)
+        ) from e
+
+    timezones = data.get("timezones") if isinstance(data, dict) else None
+    if (
+        not isinstance(timezones, list)
+        or not timezones
+        or any(not isinstance(value, str) or not value for value in timezones)
+    ):
+        raise FingerprintConfigError(
+            "iana_timezones.json: timezones must be a non-empty string list"
+        )
+    return frozenset(timezones)
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +717,14 @@ def _to_float(value: Any) -> float:
     return float(str(value).strip())
 
 
+def _required_float(payload: Mapping[str, Any], key: str) -> float:
+    """Read a required coordinate without turning a missing value into zero."""
+    value = payload.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise ValueError("missing {}".format(key))
+    return _to_float(value)
+
+
 def _parse_geojs(payload: Dict[str, Any]) -> Optional[GeoInfo]:
     """Parse the JSON returned by ``get.geojs.io/v1/ip/geo.json``."""
     return GeoInfo(
@@ -638,8 +734,8 @@ def _parse_geojs(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("region", "")).strip(),
         city=str(payload.get("city", "")).strip(),
         timezone=str(payload.get("timezone", "")).strip(),
-        latitude=_to_float(payload.get("latitude", 0)),
-        longitude=_to_float(payload.get("longitude", 0)),
+        latitude=_required_float(payload, "latitude"),
+        longitude=_required_float(payload, "longitude"),
         source="geojs",
     )
 
@@ -655,8 +751,8 @@ def _parse_ipapi(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("region", "")).strip(),
         city=str(payload.get("city", "")).strip(),
         timezone=str(payload.get("timezone", "")).strip(),
-        latitude=_to_float(payload.get("latitude", 0)),
-        longitude=_to_float(payload.get("longitude", 0)),
+        latitude=_required_float(payload, "latitude"),
+        longitude=_required_float(payload, "longitude"),
         source="ipapi",
     )
 
@@ -673,8 +769,8 @@ def _parse_ipwho(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("region", "")).strip(),
         city=str(payload.get("city", "")).strip(),
         timezone=str(tz).strip(),
-        latitude=_to_float(payload.get("latitude", 0)),
-        longitude=_to_float(payload.get("longitude", 0)),
+        latitude=_required_float(payload, "latitude"),
+        longitude=_required_float(payload, "longitude"),
         source="ipwho",
     )
 
@@ -690,8 +786,8 @@ def _parse_ipapi_com(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("regionName", "")).strip(),
         city=str(payload.get("city", "")).strip(),
         timezone=str(payload.get("timezone", "")).strip(),
-        latitude=_to_float(payload.get("lat", 0)),
-        longitude=_to_float(payload.get("lon", 0)),
+        latitude=_required_float(payload, "lat"),
+        longitude=_required_float(payload, "lon"),
         source="ipapi2",
     )
 
@@ -725,8 +821,8 @@ def _parse_ipapi_is(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(loc.get("state") or "").strip(),
         city=str(loc.get("city") or "").strip(),
         timezone=str(loc.get("timezone") or "").strip(),
-        latitude=_to_float(loc.get("latitude") or 0),
-        longitude=_to_float(loc.get("longitude") or 0),
+        latitude=_required_float(loc, "latitude"),
+        longitude=_required_float(loc, "longitude"),
         source="ipapi-is",
     )
 
@@ -743,8 +839,8 @@ def _parse_ip_guide(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(loc.get("region") or "").strip(),
         city=str(loc.get("city") or "").strip(),
         timezone=str(loc.get("timezone") or "").strip(),
-        latitude=_to_float(loc.get("latitude") or 0),
-        longitude=_to_float(loc.get("longitude") or 0),
+        latitude=_required_float(loc, "latitude"),
+        longitude=_required_float(loc, "longitude"),
         source="ip-guide",
     )
 
@@ -760,8 +856,8 @@ def _parse_ipwhois_app(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("region") or "").strip(),
         city=str(payload.get("city") or "").strip(),
         timezone=str(payload.get("timezone") or "").strip(),
-        latitude=_to_float(payload.get("latitude") or 0),
-        longitude=_to_float(payload.get("longitude") or 0),
+        latitude=_required_float(payload, "latitude"),
+        longitude=_required_float(payload, "longitude"),
         source="ipwhois-app",
     )
 
@@ -779,8 +875,8 @@ def _parse_freeipapi(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("regionName") or payload.get("region") or "").strip(),
         city=str(payload.get("cityName") or payload.get("city") or "").strip(),
         timezone=str(timezone or payload.get("timezone") or "").strip(),
-        latitude=_to_float(payload.get("latitude") or 0),
-        longitude=_to_float(payload.get("longitude") or 0),
+        latitude=_required_float(payload, "latitude"),
+        longitude=_required_float(payload, "longitude"),
         source="freeipapi",
     )
 
@@ -794,8 +890,8 @@ def _parse_reallyfreegeoip(payload: Dict[str, Any]) -> Optional[GeoInfo]:
         region=str(payload.get("region_name") or payload.get("region_code") or "").strip(),
         city=str(payload.get("city") or "").strip(),
         timezone=str(payload.get("time_zone") or payload.get("timezone") or "").strip(),
-        latitude=_to_float(payload.get("latitude") or 0),
-        longitude=_to_float(payload.get("longitude") or 0),
+        latitude=_required_float(payload, "latitude"),
+        longitude=_required_float(payload, "longitude"),
         source="reallyfreegeoip",
     )
 
@@ -816,12 +912,43 @@ _PARSERS = {
 
 def _validate_geo(geo: GeoInfo) -> None:
     """Enforce required-field constraints on a parsed :class:`GeoInfo`."""
-    if not geo.ip:
+    if not isinstance(geo.ip, str) or not geo.ip.strip():
         raise ValueError("missing ip")
-    if not geo.country_code or len(geo.country_code) != 2:
+    try:
+        ip = ipaddress.ip_address(geo.ip.strip())
+    except ValueError:
+        raise ValueError("invalid ip: %r" % geo.ip)
+    if ip.version != 4:
+        raise ValueError("ip must be IPv4: %r" % geo.ip)
+    if (
+        not isinstance(geo.country_code, str)
+        or not re.fullmatch(r"[A-Z]{2}", geo.country_code)
+    ):
         raise ValueError("invalid country_code: %r" % geo.country_code)
     if not geo.timezone:
         raise ValueError("missing timezone")
+    if not isinstance(geo.latitude, (int, float)) or isinstance(geo.latitude, bool):
+        raise ValueError("invalid latitude: %r" % geo.latitude)
+    if not math.isfinite(geo.latitude) or not -90 <= geo.latitude <= 90:
+        raise ValueError("invalid latitude: %r" % geo.latitude)
+    if not isinstance(geo.longitude, (int, float)) or isinstance(geo.longitude, bool):
+        raise ValueError("invalid longitude: %r" % geo.longitude)
+    if not math.isfinite(geo.longitude) or not -180 <= geo.longitude <= 180:
+        raise ValueError("invalid longitude: %r" % geo.longitude)
+
+    timezone = str(geo.timezone).strip()
+    if timezone != geo.timezone or any(ch.isspace() for ch in timezone):
+        raise ValueError("invalid timezone: %r" % geo.timezone)
+    if timezone not in _load_iana_timezones(_default_iana_timezones_path()):
+        raise ValueError("invalid timezone: %r" % geo.timezone)
+
+    if geo.ipv6 not in (None, ""):
+        try:
+            ipv6 = ipaddress.ip_address(str(geo.ipv6).strip())
+        except ValueError:
+            raise ValueError("invalid ipv6: %r" % geo.ipv6)
+        if ipv6.version != 6:
+            raise ValueError("ipv6 must be IPv6: %r" % geo.ipv6)
 
 
 def _http_get_json(
@@ -881,6 +1008,8 @@ def fetch_geo_info(
 
     Raises
     ------
+    FingerprintConfigError
+        A required bundled validation asset is missing or invalid.
     CountryMismatchError
         ``require_country`` set and the geo source observed a different cc.
     GeoError
@@ -906,6 +1035,8 @@ def fetch_geo_info(
                 log("[fp] geo ok ip={} cc={} tz={} src={}".format(
                     geo.ip, geo.country_code, geo.timezone, tag))
                 return geo
+            except FingerprintConfigError:
+                raise
             except CountryMismatchError:
                 # CC mismatch is final - other sources observe the same IP.
                 raise
@@ -956,7 +1087,10 @@ def coerce_manual_geo(
     else:
         raise GeoError("manual_geo must be a GeoInfo or mapping")
 
-    _validate_geo(geo)
+    try:
+        _validate_geo(geo)
+    except ValueError as e:
+        raise GeoError("invalid manual_geo: {}".format(e)) from e
     require_country = (require_country or "").strip().upper() or None
     if require_country and geo.country_code != require_country:
         raise CountryMismatchError(actual=geo.country_code, required=require_country)
@@ -966,9 +1100,6 @@ def coerce_manual_geo(
 # ---------------------------------------------------------------------------
 # Public IPv6 lookup (optional, best-effort)
 # ---------------------------------------------------------------------------
-
-# RFC 4291-ish loose check; sufficient to filter out IPv4 strings.
-_IPV6_RE = re.compile(r"^[0-9A-Fa-f:]+$")
 
 _IPV6_SOURCES: List[Tuple[str, str]] = [
     ("ipify6",       "https://api6.ipify.org?format=json"),
@@ -986,8 +1117,8 @@ def fetch_public_ipv6(
     """Best-effort lookup of the egress IPv6 address.
 
     Returns the address string on success or ``None`` on any failure.
-    Never raises - if the IPv6 cannot be resolved, the caller should
-    simply omit the ``*_webrtc_ipv6`` lines from the fpfile.
+    Never raises. The address enriches :class:`GeoInfo` diagnostics only;
+    WebRTC IPv6 policy fields require explicit ``webrtc_*_ipv6`` inputs.
     """
     import requests
     log = logger or (lambda _msg: None)
@@ -1006,9 +1137,14 @@ def fetch_public_ipv6(
                 ip = str(payload.get("ip") or payload.get("address") or "").strip()
             except ValueError:
                 ip = text
-            if ":" in ip and _IPV6_RE.match(ip):
-                log("[fp] ipv6 ok {} via {}".format(ip, tag))
-                return ip
+            try:
+                parsed = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if parsed.version == 6:
+                normalized = str(parsed)
+                log("[fp] ipv6 ok {} via {}".format(normalized, tag))
+                return normalized
         except Exception:  # noqa: BLE001
             continue
     log("[fp] ipv6 unavailable")
@@ -1018,6 +1154,30 @@ def fetch_public_ipv6(
 # ---------------------------------------------------------------------------
 # Fingerprint composition
 # ---------------------------------------------------------------------------
+
+def _detect_firefox_major_version(browser_path: Optional[str]) -> Optional[int]:
+    """Return the executable's reported Firefox major version, if available."""
+    if not isinstance(browser_path, str) or not browser_path.strip():
+        return None
+
+    kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    try:
+        completed = subprocess.run(
+            [browser_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+            **kwargs,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    output = "{}\n{}".format(completed.stdout or "", completed.stderr or "")
+    match = re.search(r"\bFirefox\s+(\d+)(?:\.|\b)", output, re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 def _build_useragent(profile: HardwareProfile, version: int) -> str:
     """Compose a Firefox user-agent string for the given profile / version.
@@ -1034,6 +1194,7 @@ def _build_useragent(profile: HardwareProfile, version: int) -> str:
 def pick_fingerprint(
     geo: GeoInfo,
     *,
+    firefox_version: Optional[int] = None,
     fingerprints_path: Optional[str] = None,
     region_locales_path: Optional[str] = None,
     rng: Optional[random.Random] = None,
@@ -1046,14 +1207,16 @@ def pick_fingerprint(
     2. Pick a hardware profile uniformly at random from the pool.
     3. Resolve the country profile based on ``geo.country_code``,
        falling back to ``_default``.
-    4. Sample a Firefox version from ``firefox_base_version`` plus the
-       configured small-version jitter (default ``±2``).
-    5. Generate a random canvas seed in ``[1, 999]``.
+    4. Use the requested Firefox major version, or the exact bundled
+       ``firefox_base_version`` when no override is supplied.
+    5. Generate independent Canvas and Audio seeds in ``[1, 2**64 - 1]``.
 
     Parameters
     ----------
     geo : GeoInfo
         Output of :func:`fetch_geo_info`.
+    firefox_version : int, optional
+        Exact Firefox major version reported by the running browser.
     fingerprints_path / region_locales_path : str, optional
         Override the bundled JSON files (e.g. for tests).
     rng : random.Random, optional
@@ -1068,6 +1231,8 @@ def pick_fingerprint(
     ------
     FingerprintConfigError
         Underlying JSON files are missing or invalid.
+    FingerprintError
+        ``firefox_version`` is not a positive integer.
     """
     rnd = rng or random
     fp_data = _load_fingerprints(
@@ -1078,9 +1243,13 @@ def pick_fingerprint(
 
     country = get_country_profile(geo.country_code, region_locales_path)
 
-    base = int(fp_data.get("firefox_base_version", 151))
-    jitter = fp_data.get("firefox_minor_jitter") or [0]
-    version = max(1, base + rnd.choice(jitter))
+    version = (
+        int(fp_data.get("firefox_base_version", 155))
+        if firefox_version is None
+        else firefox_version
+    )
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise FingerprintError("firefox_version must be a positive integer")
 
     return FingerprintProfile(
         profile_id=hw.id,
@@ -1088,7 +1257,8 @@ def pick_fingerprint(
         useragent=_build_useragent(hw, version),
         hardware=hw,
         country=country,
-        canvas_seed=rnd.randint(1, 999),
+        canvas_seed=rnd.randrange(1, 1 << 64),
+        audio_seed=rnd.randrange(1, 1 << 64),
         language_primary=country.language_primary,
         accept_language=country.accept_language,
     )
@@ -1114,9 +1284,20 @@ _RESERVED_KEYS: Tuple[str, ...] = (
     "webgl.max_texture_size", "webgl.max_cube_map_texture_size",
     "webgl.max_texture_image_units", "webgl.max_vertex_attribs",
     "webgl.aliased_point_size_max", "webgl.max_viewport_dim",
-    "width", "height", "canvas",
+    "width", "height",
+    "canvas", "canvas.enabled", "canvas.scope",
+    "canvas.mode", "canvas.seed", "canvas.strength",
+    "canvas.preserveAlpha", "canvas.preserveWhitePoint",
+    "canvas.pngMetadata",
+    "audio", "audio.enabled", "audio.mode", "audio.scope", "audio.seed",
+    "geolocation.enabled", "geolocation.latitude", "geolocation.longitude",
+    "geolocation.accuracy", "geolocation.altitude",
+    "geolocation.altitudeAccuracy", "geolocation.heading",
+    "geolocation.speed", "geolocation.timestamp", "geolocation.permission",
     "httpauth.host", "httpauth.port",
     "httpauth.username", "httpauth.password",
+    "socksauth.host", "socksauth.port",
+    "socksauth.username", "socksauth.password",
 )
 
 
@@ -1145,6 +1326,190 @@ def _atomic_write_text(path: str, content: str) -> None:
         raise
 
 
+def _validate_seed(name: str, value: Any) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value < (1 << 64)
+    ):
+        raise FingerprintError(
+            "{} must be an integer in [1, 2**64 - 1]".format(name)
+        )
+    return value
+
+
+def _validate_geolocation_number(
+    name: str,
+    value: Any,
+    minimum: float,
+    maximum: float,
+    *,
+    minimum_open: bool = False,
+) -> Any:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or (value <= minimum if minimum_open else value < minimum)
+        or value > maximum
+    ):
+        boundary = "(" if minimum_open else "["
+        raise FingerprintError(
+            "{} must be a finite number in {}{}, {}]".format(
+                name, boundary, minimum, maximum
+            )
+        )
+    return value
+
+
+def _validate_optional_geolocation_number(
+    name: str,
+    value: Any,
+    minimum: float,
+    maximum: float,
+    *,
+    minimum_open: bool = False,
+) -> Any:
+    if value is None:
+        return None
+    return _validate_geolocation_number(
+        name,
+        value,
+        minimum,
+        maximum,
+        minimum_open=minimum_open,
+    )
+
+
+def _serialize_nullable_number(value: Any) -> str:
+    return "null" if value is None else str(value)
+
+
+def _build_geolocation_profile(
+    geo: GeoInfo,
+    *,
+    enabled: bool = True,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    accuracy: float = DEFAULT_GEOLOCATION_ACCURACY,
+    altitude: Optional[float] = None,
+    altitude_accuracy: Optional[float] = None,
+    heading: Optional[float] = None,
+    speed: Optional[float] = None,
+    timestamp: Any = "now",
+    permission: str = "granted",
+) -> GeolocationProfile:
+    if not isinstance(enabled, bool):
+        raise FingerprintError("geolocation_enabled must be a boolean")
+
+    latitude = _validate_geolocation_number(
+        "geolocation_latitude",
+        geo.latitude if latitude is None else latitude,
+        -90,
+        90,
+    )
+    longitude = _validate_geolocation_number(
+        "geolocation_longitude",
+        geo.longitude if longitude is None else longitude,
+        -180,
+        180,
+    )
+    # The fingerprint kernel requires accuracy > 0 even though BiDi alone
+    # accepts zero, so the coordinated profile uses the stricter contract.
+    accuracy = _validate_geolocation_number(
+        "geolocation_accuracy",
+        accuracy,
+        0,
+        float("1.7976931348623157e308"),
+        minimum_open=True,
+    )
+    altitude = _validate_optional_geolocation_number(
+        "geolocation_altitude",
+        altitude,
+        -float("1.7976931348623157e308"),
+        float("1.7976931348623157e308"),
+    )
+    altitude_accuracy = _validate_optional_geolocation_number(
+        "geolocation_altitude_accuracy",
+        altitude_accuracy,
+        0,
+        float("1.7976931348623157e308"),
+    )
+    heading = _validate_optional_geolocation_number(
+        "geolocation_heading", heading, 0, 360
+    )
+    speed = _validate_optional_geolocation_number(
+        "geolocation_speed",
+        speed,
+        0,
+        float("1.7976931348623157e308"),
+    )
+    if altitude_accuracy is not None and altitude is None:
+        raise FingerprintError(
+            "geolocation_altitude_accuracy requires geolocation_altitude"
+        )
+    if heading is not None and (
+        heading >= 360 or speed is None or speed <= 0
+    ):
+        raise FingerprintError(
+            "geolocation_heading requires geolocation_speed greater than zero"
+        )
+    if timestamp != "now" and (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, int)
+        or not 0 <= timestamp < (1 << 64)
+    ):
+        raise FingerprintError(
+            "geolocation_timestamp must be 'now' or a uint64 integer"
+        )
+    if permission not in ("prompt", "granted", "denied"):
+        raise FingerprintError(
+            "geolocation_permission must be prompt, granted, or denied"
+        )
+
+    return GeolocationProfile(
+        enabled=enabled,
+        latitude=latitude,
+        longitude=longitude,
+        accuracy=accuracy,
+        altitude=altitude,
+        altitude_accuracy=altitude_accuracy,
+        heading=heading,
+        speed=speed,
+        timestamp=timestamp,
+        permission=permission,
+    )
+
+
+def _validate_webrtc_ip(
+    name: str,
+    value: Optional[str],
+    expected_version: int,
+) -> Optional[str]:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or "%" in value
+    ):
+        raise FingerprintError(
+            "{} must be a valid IPv{} address".format(name, expected_version)
+        )
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        raise FingerprintError(
+            "{} must be a valid IPv{} address".format(name, expected_version)
+        )
+    if address.version != expected_version:
+        raise FingerprintError(
+            "{} must be an IPv{} address".format(name, expected_version)
+        )
+    return str(address)
+
+
 def write_fpfile(
     fpfile_path: str,
     geo: GeoInfo,
@@ -1155,6 +1520,20 @@ def write_fpfile(
     proxy_user: Optional[str] = None,
     proxy_pwd: Optional[str] = None,
     proxy_scheme: str = "http",
+    webrtc_local_ipv4: Optional[str] = None,
+    webrtc_local_ipv6: Optional[str] = None,
+    webrtc_public_ipv4: Optional[str] = None,
+    webrtc_public_ipv6: Optional[str] = None,
+    geolocation_enabled: bool = True,
+    geolocation_latitude: Optional[float] = None,
+    geolocation_longitude: Optional[float] = None,
+    geolocation_accuracy: float = DEFAULT_GEOLOCATION_ACCURACY,
+    geolocation_altitude: Optional[float] = None,
+    geolocation_altitude_accuracy: Optional[float] = None,
+    geolocation_heading: Optional[float] = None,
+    geolocation_speed: Optional[float] = None,
+    geolocation_timestamp: Any = "now",
+    geolocation_permission: str = "granted",
     extra: Optional[Dict[str, str]] = None,
 ) -> None:
     """Serialize ``(geo, fp)`` to a firefox-fingerprintBrowser fpfile.
@@ -1168,13 +1547,23 @@ def write_fpfile(
     fpfile_path : str
         Target file path (the parent directory must already exist).
     geo : GeoInfo
-        Source of WebRTC IPs and timezone.
+        Source of timezone and default geolocation coordinates.
     fp : FingerprintProfile
         Source of every other field (hardware + country + UA + canvas).
     proxy_host, proxy_port, proxy_user, proxy_pwd, proxy_scheme : optional
         When HTTP credentials are provided, ``httpauth.*`` lines are
         appended. When ``proxy_scheme`` is SOCKS5, ``socksauth.*`` fields
         are appended so the fingerprint browser can authenticate SOCKS5.
+    webrtc_local_ipv4 / webrtc_local_ipv6 : str, optional
+        Exact host ICE addresses accepted by the Firefox WebRTC policy.
+        Omitted by default because proxy geo data cannot identify them.
+    webrtc_public_ipv4 / webrtc_public_ipv6 : str, optional
+        Exact server-reflexive or peer-reflexive ICE addresses accepted by
+        the Firefox WebRTC policy. Omitted by default because HTTP/SOCKS geo
+        lookup does not prove the address used by STUN.
+    geolocation_* : optional
+        Complete kernel geolocation profile. Latitude and longitude default
+        to the proxy-derived ``GeoInfo`` coordinates.
     extra : dict, optional
         Additional ``key: value`` pairs appended after the core fields.
         Cannot override any reserved key (see ``_RESERVED_KEYS``).
@@ -1182,35 +1571,90 @@ def write_fpfile(
     Raises
     ------
     FingerprintError
-        ``extra`` tries to override a reserved key.
+        A Canvas or Audio seed is invalid, or ``extra`` contains a reserved key,
+        delimiter, or line break.
     OSError
         File-system error during write.
     """
+    canvas_seed = _validate_seed("canvas_seed", fp.canvas_seed)
+    audio_seed = _validate_seed("audio_seed", fp.audio_seed)
+    webrtc_local_ipv4 = _validate_webrtc_ip(
+        "webrtc_local_ipv4", webrtc_local_ipv4, 4
+    )
+    webrtc_local_ipv6 = _validate_webrtc_ip(
+        "webrtc_local_ipv6", webrtc_local_ipv6, 6
+    )
+    webrtc_public_ipv4 = _validate_webrtc_ip(
+        "webrtc_public_ipv4", webrtc_public_ipv4, 4
+    )
+    webrtc_public_ipv6 = _validate_webrtc_ip(
+        "webrtc_public_ipv6", webrtc_public_ipv6, 6
+    )
+
+    geolocation = _build_geolocation_profile(
+        geo,
+        enabled=geolocation_enabled,
+        latitude=geolocation_latitude,
+        longitude=geolocation_longitude,
+        accuracy=geolocation_accuracy,
+        altitude=geolocation_altitude,
+        altitude_accuracy=geolocation_altitude_accuracy,
+        heading=geolocation_heading,
+        speed=geolocation_speed,
+        timestamp=geolocation_timestamp,
+        permission=geolocation_permission,
+    )
+
+    extra_items: List[Tuple[str, str]] = []
     if extra:
-        bad = [k for k in extra if k in _RESERVED_KEYS]
-        if bad:
-            raise FingerprintError(
-                "extra keys collide with reserved fields: %r" % bad
-            )
+        for raw_key, raw_value in extra.items():
+            key = str(raw_key)
+            value = str(raw_value)
+            if key.strip() in _RESERVED_KEYS:
+                raise FingerprintError(
+                    "extra keys collide with reserved fields: %r" % [raw_key]
+                )
+            if any(char in key for char in ":=\r\n"):
+                raise FingerprintError(
+                    "extra keys must not contain delimiters or line breaks"
+                )
+            if "\r" in value or "\n" in value:
+                raise FingerprintError(
+                    "extra values must not contain line breaks"
+                )
+            extra_items.append((key, value))
 
     hw = fp.hardware
     country = fp.country
-    ipv6 = (geo.ipv6 or "").strip()
-
     lines: List[str] = []
     a = lines.append
 
     a("webdriver:0")
 
-    a("local_webrtc_ipv4:" + geo.ip)
-    if ipv6:
-        a("local_webrtc_ipv6:" + ipv6)
-    a("public_webrtc_ipv4:" + geo.ip)
-    if ipv6:
-        a("public_webrtc_ipv6:" + ipv6)
+    if webrtc_local_ipv4:
+        a("local_webrtc_ipv4:" + webrtc_local_ipv4)
+    if webrtc_local_ipv6:
+        a("local_webrtc_ipv6:" + webrtc_local_ipv6)
+    if webrtc_public_ipv4:
+        a("public_webrtc_ipv4:" + webrtc_public_ipv4)
+    if webrtc_public_ipv6:
+        a("public_webrtc_ipv6:" + webrtc_public_ipv6)
 
     a("timezone:" + geo.timezone)
     a("language:" + country.language)
+
+    a("geolocation.enabled:" +
+      ("true" if geolocation.enabled else "false"))
+    a("geolocation.latitude:" + str(geolocation.latitude))
+    a("geolocation.longitude:" + str(geolocation.longitude))
+    a("geolocation.accuracy:" + str(geolocation.accuracy))
+    a("geolocation.altitude:" + _serialize_nullable_number(geolocation.altitude))
+    a("geolocation.altitudeAccuracy:" +
+      _serialize_nullable_number(geolocation.altitude_accuracy))
+    a("geolocation.heading:" + _serialize_nullable_number(geolocation.heading))
+    a("geolocation.speed:" + _serialize_nullable_number(geolocation.speed))
+    a("geolocation.timestamp:" + str(geolocation.timestamp))
+    a("geolocation.permission:" + geolocation.permission)
 
     a("speech.voices.local:" + "|".join(country.speech_local))
     a("speech.voices.remote:" + "|".join(country.speech_remote))
@@ -1237,7 +1681,13 @@ def write_fpfile(
     a("webgl.aliased_point_size_max:" + str(w.aliased_point_size_max))
     a("webgl.max_viewport_dim:" + str(w.max_viewport_dim))
 
-    a("canvas:" + str(fp.canvas_seed))
+    a("canvas.mode:pixel")
+    a("canvas.seed:" + str(canvas_seed))
+    a("canvas.strength:low")
+    a("canvas.preserveAlpha:true")
+    a("canvas.preserveWhitePoint:true")
+    a("canvas.pngMetadata:false")
+    a("audio.seed:" + str(audio_seed))
 
     proxy_scheme = (proxy_scheme or "http").strip().lower()
     # The fingerprint browser reads HTTP and SOCKS5 proxy credentials from
@@ -1257,8 +1707,8 @@ def write_fpfile(
         a("httpauth.username:" + proxy_user)
         a("httpauth.password:" + proxy_pwd)
 
-    if extra:
-        for k, v in extra.items():
+    if extra_items:
+        for k, v in extra_items:
             a("{}:{}".format(k, v))
 
     _atomic_write_text(fpfile_path, "\n".join(lines) + "\n")
@@ -1293,6 +1743,11 @@ class FingerprintContext:
         ``requests``-style proxies dict (mirrored from inputs).
     proxy_scheme / proxy_host / proxy_port / proxy_user / proxy_pwd
         Original proxy parameters, kept for diagnostics.
+    geolocation
+        Validated coordinates shared by the fpfile and BiDi overlay.
+    webrtc_local_ipv4 / webrtc_local_ipv6 / webrtc_public_ipv4 /
+    webrtc_public_ipv6
+        Validated explicit ICE overrides, or ``None`` for native ICE.
     """
 
     geo: GeoInfo
@@ -1305,6 +1760,11 @@ class FingerprintContext:
     proxy_port: Optional[int] = None
     proxy_user: Optional[str] = None
     proxy_pwd: Optional[str] = None
+    geolocation: Optional[GeolocationProfile] = None
+    webrtc_local_ipv4: Optional[str] = None
+    webrtc_local_ipv6: Optional[str] = None
+    webrtc_public_ipv4: Optional[str] = None
+    webrtc_public_ipv6: Optional[str] = None
 
     # ---- inspection ----
 
@@ -1314,7 +1774,7 @@ class FingerprintContext:
         ipv6_state = "yes" if self.geo.ipv6 else "no"
         return (
             "[fp] {pid} ua=Firefox/{ver} webgl={vendor} "
-            "geo={cc}/{tz} ip={ip} ipv6={v6} canvas={c}"
+            "geo={cc}/{tz} ip={ip} ipv6={v6} canvas={c} audio={a}"
         ).format(
             pid=self.fingerprint.profile_id,
             ver=self.fingerprint.firefox_version,
@@ -1324,10 +1784,18 @@ class FingerprintContext:
             ip=masked,
             v6=ipv6_state,
             c=self.fingerprint.canvas_seed,
+            a=self.fingerprint.audio_seed,
         )
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable summary, e.g. for an account log."""
+        geolocation = self.geolocation or _build_geolocation_profile(self.geo)
+        webrtc_values = (
+            self.webrtc_local_ipv4,
+            self.webrtc_local_ipv6,
+            self.webrtc_public_ipv4,
+            self.webrtc_public_ipv6,
+        )
         return {
             "profile_id": self.fingerprint.profile_id,
             "firefox_version": self.fingerprint.firefox_version,
@@ -1340,6 +1808,19 @@ class FingerprintContext:
             "userdir": self.userdir,
             "fpfile_path": self.fpfile_path,
             "canvas_seed": self.fingerprint.canvas_seed,
+            "audio_seed": self.fingerprint.audio_seed,
+            "geolocation": dataclasses.asdict(geolocation),
+            "webrtc": {
+                "mode": (
+                    "explicit"
+                    if any(value is not None for value in webrtc_values)
+                    else "native"
+                ),
+                "local_ipv4": self.webrtc_local_ipv4,
+                "local_ipv6": self.webrtc_local_ipv6,
+                "public_ipv4": self.webrtc_public_ipv4,
+                "public_ipv6": self.webrtc_public_ipv6,
+            },
         }
 
     # ---- emulation overlay ----
@@ -1354,7 +1835,7 @@ class FingerprintContext:
         set_timezone: bool = True,
         set_extra_headers: bool = True,
         logger: Optional[Callable[[str], None]] = None,
-    ) -> Dict[str, bool]:
+    ) -> Union[Dict[str, bool], Awaitable[Dict[str, bool]]]:
         """Inject a BiDi emulation overlay on top of the kernel fingerprint.
 
         Acts as a defence-in-depth layer: even if a kernel field doesn't
@@ -1374,71 +1855,165 @@ class FingerprintContext:
 
         Returns
         -------
-        dict[str, bool]
+        dict[str, bool] or Awaitable[dict[str, bool]]
             ``{"screen": bool, "geolocation": bool, "locale": bool,
             "timezone": bool, "headers": bool}`` - whether each overlay
-            was applied.
+            was applied. Synchronous page hooks return the mapping directly;
+            when a hook is asynchronous, await the returned object to execute
+            the remaining overlays and obtain the mapping.
         """
         log = logger or (lambda _msg: None)
         result = {"screen": False, "geolocation": False, "locale": False,
                   "timezone": False, "headers": False}
+        geolocation = self.geolocation or _build_geolocation_profile(self.geo)
+        locales = [part.strip() for part in self.fingerprint.country.language.split(",")
+                   if part.strip()]
+        operations = []
+
+        def add_operation(key, call, message):
+            operations.append((key, call, message))
 
         if set_screen_size:
-            try:
-                page.emulation.set_screen_size(
+            add_operation(
+                "screen",
+                lambda: page.emulation.set_screen_size(
                     self.fingerprint.hardware.width,
                     self.fingerprint.hardware.height,
-                )
-                result["screen"] = True
-                log("[emu] screen {}x{}".format(
+                ),
+                "[emu] screen {}x{}".format(
                     self.fingerprint.hardware.width,
                     self.fingerprint.hardware.height,
-                ))
-            except Exception as e:  # noqa: BLE001
-                log("[emu] screen skipped: {}".format(e))
-
+                ),
+            )
         if set_geolocation:
-            try:
-                page.emulation.set_geolocation(
-                    self.geo.latitude, self.geo.longitude, accuracy=100,
+            if geolocation.enabled:
+                if geolocation.timestamp != "now":
+                    add_operation(
+                        "geolocation_reset",
+                        lambda: page.emulation.clear_geolocation(),
+                        "[emu] geolocation custom timestamp is kernel-managed; "
+                        "cleared BiDi override",
+                    )
+                else:
+                    geolocation_kwargs = {"accuracy": geolocation.accuracy}
+                    for key, value in (
+                        ("altitude", geolocation.altitude),
+                        ("altitude_accuracy", geolocation.altitude_accuracy),
+                        ("heading", geolocation.heading),
+                        ("speed", geolocation.speed),
+                    ):
+                        if value is not None:
+                            geolocation_kwargs[key] = value
+                    add_operation(
+                        "geolocation",
+                        lambda: page.emulation.set_geolocation(
+                            geolocation.latitude,
+                            geolocation.longitude,
+                            **geolocation_kwargs
+                        ),
+                        "[emu] geolocation ({}, {})".format(
+                            geolocation.latitude, geolocation.longitude
+                        ),
+                    )
+            else:
+                add_operation(
+                    "geolocation_reset",
+                    lambda: page.emulation.clear_geolocation(),
+                    "[emu] geolocation disabled; cleared BiDi override",
                 )
-                result["geolocation"] = True
-                log("[emu] geolocation ({}, {})".format(
-                    self.geo.latitude, self.geo.longitude))
-            except Exception as e:  # noqa: BLE001
-                log("[emu] geolocation skipped: {}".format(e))
-
         if set_locale:
-            try:
-                page.emulation.set_locale([
-                    self.fingerprint.language_primary, "en",
-                ])
-                result["locale"] = True
-                log("[emu] locale {}".format(self.fingerprint.language_primary))
-            except Exception as e:  # noqa: BLE001
-                log("[emu] locale skipped: {}".format(e))
-
+            add_operation(
+                "locale",
+                lambda: page.emulation.set_locale(locales),
+                "[emu] locale {}".format(",".join(locales)),
+            )
         if set_timezone:
-            try:
-                page.emulation.set_timezone(self.geo.timezone)
-                result["timezone"] = True
-                log("[emu] timezone {}".format(self.geo.timezone))
-            except Exception as e:  # noqa: BLE001
-                log("[emu] timezone skipped: {}".format(e))
-
+            add_operation(
+                "timezone",
+                lambda: page.emulation.set_timezone(self.geo.timezone),
+                "[emu] timezone {}".format(self.geo.timezone),
+            )
         if set_extra_headers:
-            try:
-                page.network.set_extra_headers({
+            add_operation(
+                "headers",
+                lambda: page.network.set_extra_headers({
                     "Accept-Language": self.fingerprint.accept_language,
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "DNT": "1",
-                })
-                result["headers"] = True
-                log("[emu] headers Accept-Language={}".format(
-                    self.fingerprint.accept_language))
-            except Exception as e:  # noqa: BLE001
-                log("[emu] headers skipped: {}".format(e))
+                }),
+                "[emu] headers Accept-Language={}".format(
+                    self.fingerprint.accept_language
+                ),
+            )
 
+        def mark_success(key, message):
+            if key in result:
+                result[key] = True
+            log(message)
+
+        def invoke(index):
+            key, call, message = operations[index]
+            try:
+                value = call()
+            except Exception as e:  # noqa: BLE001
+                log("[emu] {} skipped: {}".format(key, e))
+                return None
+            if inspect.isawaitable(value):
+                return value
+            mark_success(key, message)
+            return None
+
+        for index in range(len(operations)):
+            pending = invoke(index)
+            if pending is None:
+                continue
+
+            async def finish(start_index=index, first_pending=pending):
+                key, _call, message = operations[start_index]
+                try:
+                    await first_pending
+                except Exception as e:  # noqa: BLE001
+                    log("[emu] {} skipped: {}".format(key, e))
+                else:
+                    mark_success(key, message)
+
+                for next_index in range(start_index + 1, len(operations)):
+                    next_key, next_call, next_message = operations[next_index]
+                    try:
+                        value = next_call()
+                        if inspect.isawaitable(value):
+                            await value
+                    except Exception as e:  # noqa: BLE001
+                        log("[emu] {} skipped: {}".format(next_key, e))
+                    else:
+                        mark_success(next_key, next_message)
+                return result
+
+            return finish()
+
+        return result
+
+    async def apply_emulation_async(
+        self,
+        page: Any,
+        *,
+        set_screen_size: bool = True,
+        set_geolocation: bool = True,
+        set_locale: bool = True,
+        set_timezone: bool = True,
+        set_extra_headers: bool = True,
+        logger: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, bool]:
+        """Async wrapper that always returns an awaitable result mapping."""
+        result = self.apply_emulation(
+            page,
+            set_screen_size=set_screen_size,
+            set_geolocation=set_geolocation,
+            set_locale=set_locale,
+            set_timezone=set_timezone,
+            set_extra_headers=set_extra_headers,
+            logger=logger,
+        )
+        if inspect.isawaitable(result):
+            return await result
         return result
 
 
@@ -1486,6 +2061,21 @@ def apply_smart_fingerprint(
     userdir: Optional[str] = None,
     base_dir: Optional[str] = None,
     fpfile_name: str = "fpfile.txt",
+    firefox_version: Optional[int] = None,
+    webrtc_local_ipv4: Optional[str] = None,
+    webrtc_local_ipv6: Optional[str] = None,
+    webrtc_public_ipv4: Optional[str] = None,
+    webrtc_public_ipv6: Optional[str] = None,
+    geolocation_enabled: bool = True,
+    geolocation_latitude: Optional[float] = None,
+    geolocation_longitude: Optional[float] = None,
+    geolocation_accuracy: float = DEFAULT_GEOLOCATION_ACCURACY,
+    geolocation_altitude: Optional[float] = None,
+    geolocation_altitude_accuracy: Optional[float] = None,
+    geolocation_heading: Optional[float] = None,
+    geolocation_speed: Optional[float] = None,
+    geolocation_timestamp: Any = "now",
+    geolocation_permission: str = "granted",
     require_country: Optional[str] = "US",
     geo_timeout: float = 8.0,
     geo_retries: int = 1,
@@ -1497,6 +2087,7 @@ def apply_smart_fingerprint(
     set_proxy_on_opts: bool = True,
     set_userdir_on_opts: bool = True,
     set_fpfile_on_opts: bool = True,
+    set_startup_page_on_opts: bool = True,
     set_window_size_on_opts: bool = False,
     logger: Optional[Callable[[str], None]] = None,
 ) -> FingerprintContext:
@@ -1512,8 +2103,9 @@ def apply_smart_fingerprint(
     4. ``_generate_userdir()``   - only if ``userdir`` is ``None``.
     5. ``pick_fingerprint()``    - sample one of the 22 hardware profiles.
     6. ``write_fpfile()``        - serialize to ``fpfile.txt``.
-    7. Configure the supplied ``FirefoxOptions``: proxy / userdir /
-       fpfile (toggleable individually).
+    7. Configure the supplied ``FirefoxOptions``: proxy / userdir / fpfile
+       and a script-accessible ``about:blank`` startup page (toggleable
+       individually).
 
     Parameters
     ----------
@@ -1530,6 +2122,21 @@ def apply_smart_fingerprint(
         Parent directory used to allocate new userdirs.
     fpfile_name : str
         File name written under the userdir.
+    firefox_version : int, optional
+        Exact Firefox major version for the generated UA. When omitted, the
+        value is read from ``opts.browser_path`` and falls back to the bundled
+        fingerprint data only when the executable cannot be queried.
+    webrtc_local_ipv4 / webrtc_local_ipv6 / webrtc_public_ipv4 /
+    webrtc_public_ipv6 : str, optional
+        Explicit ICE addresses for the Firefox WebRTC policy. If omitted,
+        the generated fpfile leaves WebRTC policy in native mode.
+    geolocation_* : optional
+        Coordinated kernel/BiDi geolocation profile. Coordinates default to
+        the proxy-derived ``GeoInfo`` and accuracy defaults to 15000 metres.
+        Numeric timestamps are Unix epoch milliseconds and remain kernel-only
+        because WebDriver BiDi has no timestamp field. ``prompt`` / ``denied``
+        permission states are likewise enforced by the startup kernel; BiDi
+        only overlays the coordinate fields.
     require_country : str, optional
         ISO-2 country code required for the egress IP; ``None`` disables
         the check. Default ``"US"``.
@@ -1549,6 +2156,10 @@ def apply_smart_fingerprint(
     set_proxy_on_opts / set_userdir_on_opts / set_fpfile_on_opts : bool
         Individually enable or disable each opts mutation if you want
         to drive them yourself.
+    set_startup_page_on_opts : bool
+        Add ``about:blank`` as the startup page so BiDi overlays can be
+        applied immediately without privileged system access. Disable this
+        when the caller already supplies a script-accessible startup URL.
     set_window_size_on_opts : bool
         Deprecated compatibility parameter. Fingerprint screen dimensions
         are never mapped to the Firefox outer window. Call
@@ -1563,7 +2174,8 @@ def apply_smart_fingerprint(
 
     Raises
     ------
-    CountryMismatchError, GeoError, FingerprintConfigError, OSError
+    FingerprintError, CountryMismatchError, GeoError, FingerprintConfigError,
+    OSError
     """
     log = logger or (lambda _msg: None)
 
@@ -1615,13 +2227,47 @@ def apply_smart_fingerprint(
     log("[fp] userdir " + userdir_abs)
 
     # 5) pick fingerprint
+    resolved_firefox_version = firefox_version
+    if resolved_firefox_version is None:
+        browser_path = getattr(opts, "browser_path", None)
+        resolved_firefox_version = _detect_firefox_major_version(browser_path)
+        if resolved_firefox_version is not None:
+            log("[fp] detected Firefox/{}".format(resolved_firefox_version))
+
     fp = pick_fingerprint(
         geo,
+        firefox_version=resolved_firefox_version,
         fingerprints_path=fingerprints_path,
         region_locales_path=region_locales_path,
         rng=rng,
     )
     log("[fp] picked profile " + fp.profile_id)
+
+    geolocation = _build_geolocation_profile(
+        geo,
+        enabled=geolocation_enabled,
+        latitude=geolocation_latitude,
+        longitude=geolocation_longitude,
+        accuracy=geolocation_accuracy,
+        altitude=geolocation_altitude,
+        altitude_accuracy=geolocation_altitude_accuracy,
+        heading=geolocation_heading,
+        speed=geolocation_speed,
+        timestamp=geolocation_timestamp,
+        permission=geolocation_permission,
+    )
+    webrtc_local_ipv4 = _validate_webrtc_ip(
+        "webrtc_local_ipv4", webrtc_local_ipv4, 4
+    )
+    webrtc_local_ipv6 = _validate_webrtc_ip(
+        "webrtc_local_ipv6", webrtc_local_ipv6, 6
+    )
+    webrtc_public_ipv4 = _validate_webrtc_ip(
+        "webrtc_public_ipv4", webrtc_public_ipv4, 4
+    )
+    webrtc_public_ipv6 = _validate_webrtc_ip(
+        "webrtc_public_ipv6", webrtc_public_ipv6, 6
+    )
 
     # 6) write fpfile
     fpfile_path = os.path.join(userdir_abs, fpfile_name)
@@ -1634,6 +2280,20 @@ def apply_smart_fingerprint(
         proxy_user=proxy_user,
         proxy_pwd=proxy_pwd,
         proxy_scheme=proxy_scheme,
+        webrtc_local_ipv4=webrtc_local_ipv4,
+        webrtc_local_ipv6=webrtc_local_ipv6,
+        webrtc_public_ipv4=webrtc_public_ipv4,
+        webrtc_public_ipv6=webrtc_public_ipv6,
+        geolocation_enabled=geolocation.enabled,
+        geolocation_latitude=geolocation.latitude,
+        geolocation_longitude=geolocation.longitude,
+        geolocation_accuracy=geolocation.accuracy,
+        geolocation_altitude=geolocation.altitude,
+        geolocation_altitude_accuracy=geolocation.altitude_accuracy,
+        geolocation_heading=geolocation.heading,
+        geolocation_speed=geolocation.speed,
+        geolocation_timestamp=geolocation.timestamp,
+        geolocation_permission=geolocation.permission,
     )
     log("[fp] fpfile " + fpfile_path)
 
@@ -1660,6 +2320,12 @@ def apply_smart_fingerprint(
         except Exception as e:  # noqa: BLE001
             log("[fp] set_fpfile failed: " + str(e))
 
+    if set_startup_page_on_opts:
+        try:
+            opts.set_argument("about:blank")
+        except Exception as e:  # noqa: BLE001
+            log("[fp] set startup page failed: " + str(e))
+
     if set_window_size_on_opts:
         log(
             "[fp] set_window_size_on_opts is deprecated and ignored; "
@@ -1677,4 +2343,9 @@ def apply_smart_fingerprint(
         proxy_port=proxy_port,
         proxy_user=proxy_user,
         proxy_pwd=proxy_pwd,
+        geolocation=geolocation,
+        webrtc_local_ipv4=webrtc_local_ipv4,
+        webrtc_local_ipv6=webrtc_local_ipv6,
+        webrtc_public_ipv4=webrtc_public_ipv4,
+        webrtc_public_ipv6=webrtc_public_ipv6,
     )

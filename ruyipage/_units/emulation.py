@@ -246,13 +246,27 @@ class EmulationManager(object):
             capability=capability,
         )
 
-    def set_geolocation(self, latitude, longitude, accuracy=100):
+    def set_geolocation(
+        self,
+        latitude,
+        longitude,
+        accuracy=100,
+        *,
+        altitude=None,
+        altitude_accuracy=None,
+        heading=None,
+        speed=None,
+    ):
         """设置地理位置 (FF139+)。
 
         Args:
             latitude: 纬度
             longitude: 经度
             accuracy: 精度（米），常见值 50~100
+            altitude: 海拔（米），可选
+            altitude_accuracy: 海拔精度（米），可选
+            heading: 航向角 [0, 360)，可选
+            speed: 速度（米/秒），可选
 
         Returns:
             owner
@@ -263,6 +277,10 @@ class EmulationManager(object):
             longitude=longitude,
             accuracy=accuracy,
             contexts=self._ctx(),
+            altitude=altitude,
+            altitude_accuracy=altitude_accuracy,
+            heading=heading,
+            speed=speed,
         )
         return self._owner
 
