@@ -653,6 +653,7 @@ class Actions(object):
             self: 支持链式调用。
         """
         start_x, start_y = self.curr_x, self.curr_y
+        ele_or_loc = getattr(ele_or_loc, "_sync", ele_or_loc)
         is_element = hasattr(ele_or_loc, "states") and hasattr(ele_or_loc, "_get_center")
 
         target_x, target_y = self._resolve_position(ele_or_loc, scroll=False)
@@ -1053,6 +1054,9 @@ class Actions(object):
 
         if isinstance(ele_or_loc, (list, tuple)):
             return ele_or_loc[0], ele_or_loc[1]
+
+        # aio 包装元素（AsyncFirefoxElement）不含 _get_center，先解包为同步元素
+        ele_or_loc = getattr(ele_or_loc, "_sync", ele_or_loc)
 
         # 假定是元素对象
         get_center = getattr(ele_or_loc, "_get_center", None)
