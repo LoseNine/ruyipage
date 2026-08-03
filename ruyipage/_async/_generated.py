@@ -6,7 +6,7 @@
 # │ 生成时间: 2026-08-02 23:52:54                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
-from .greenlet_bridge import greenlet_spawn
+from .greenlet_bridge import greenlet_spawn as _bridge_greenlet_spawn
 from ._overrides import AsyncFirefoxBaseMixin, AsyncFirefoxElementMixin
 
 
@@ -802,3 +802,44 @@ class AsyncFirefoxElement(AsyncFirefoxElementMixin):
     async def style(self, name, pseudo=''):
         _r = await greenlet_spawn(self._sync.style, name, pseudo=pseudo)
         return _wrap_async_result(_r, self)
+
+
+def _unwrap_async_argument(value):
+    """Unwrap ruyipage async proxies before calling the synchronous API."""
+    wrapper_types = (
+        AsyncUnitProxy,
+        AsyncNoneElement,
+        AsyncFirefoxBase,
+        AsyncFirefoxElement,
+    )
+    if isinstance(value, wrapper_types):
+        return value._sync
+
+    if type(value) is list:
+        items = [_unwrap_async_argument(item) for item in value]
+        return value if all(a is b for a, b in zip(items, value)) else items
+    if type(value) is tuple:
+        items = tuple(_unwrap_async_argument(item) for item in value)
+        return value if all(a is b for a, b in zip(items, value)) else items
+    if type(value) is dict:
+        items = [
+            (key, _unwrap_async_argument(item))
+            for key, item in value.items()
+        ]
+        if all(
+            new_item is item
+            for (_, new_item), (_, item) in zip(items, value.items())
+        ):
+            return value
+        return dict(items)
+    return value
+
+
+async def greenlet_spawn(fn, *args, **kwargs):
+    """Run a sync API call after unwrapping ruyipage async arguments."""
+    args = tuple(_unwrap_async_argument(value) for value in args)
+    kwargs = {
+        key: _unwrap_async_argument(value)
+        for key, value in kwargs.items()
+    }
+    return await _bridge_greenlet_spawn(fn, *args, **kwargs)

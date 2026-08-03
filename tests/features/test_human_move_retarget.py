@@ -61,6 +61,68 @@ def test_human_move_re_resolves_element_center_after_scroll(monkeypatch):
     assert actions.curr_y == 514
 
 
+@pytest.mark.asyncio
+@pytest.mark.feature
+async def test_async_actions_human_move_uses_wrapped_element_center():
+    from ruyipage._async._generated import AsyncFirefoxElement, AsyncUnitProxy
+
+    owner = _DummyOwner()
+    actions = Actions(owner)
+    sync_element = _DummyElement([(420, 240)], in_viewport=True)
+    element = AsyncFirefoxElement(sync_element)
+    async_actions = AsyncUnitProxy(actions)
+
+    result = await async_actions.human_move(element, style="line")
+
+    moves = [a for a in actions._pointer_actions if a.get("type") == "pointerMove"]
+    assert result is async_actions
+    assert moves[-1]["x"] == 420
+    assert moves[-1]["y"] == 240
+    assert actions.curr_x == 420
+    assert actions.curr_y == 240
+
+
+@pytest.mark.asyncio
+@pytest.mark.feature
+async def test_async_actions_drag_to_unwraps_source_and_target_elements():
+    from ruyipage._async._generated import AsyncFirefoxElement, AsyncUnitProxy
+
+    actions = Actions(_DummyOwner())
+    source = AsyncFirefoxElement(
+        _DummyElement([(120, 80)], in_viewport=True)
+    )
+    target = AsyncFirefoxElement(
+        _DummyElement([(480, 320)], in_viewport=True)
+    )
+    async_actions = AsyncUnitProxy(actions)
+
+    result = await async_actions.drag_to(source, target, steps=4)
+
+    moves = [a for a in actions._pointer_actions if a.get("type") == "pointerMove"]
+    assert result is async_actions
+    assert (moves[0]["x"], moves[0]["y"]) == (120, 80)
+    assert (moves[-1]["x"], moves[-1]["y"]) == (480, 320)
+
+
+@pytest.mark.asyncio
+@pytest.mark.feature
+async def test_async_touch_move_uses_wrapped_element_center():
+    from ruyipage._async._generated import AsyncFirefoxElement, AsyncUnitProxy
+    from ruyipage._units.touch_actions import TouchActions
+
+    touch = TouchActions(_DummyOwner())
+    sync_element = _DummyElement([(360, 180)], in_viewport=True)
+    element = AsyncFirefoxElement(sync_element)
+    async_touch = AsyncUnitProxy(touch)
+
+    result = await async_touch.move_to(element)
+
+    assert result is async_touch
+    assert (touch._x, touch._y) == (360, 180)
+    assert touch._fingers[0][-1]["x"] == 360
+    assert touch._fingers[0][-1]["y"] == 180
+
+
 @pytest.mark.feature
 def test_human_move_tuple_still_clamps_out_of_viewport_target():
     owner = _DummyOwner()

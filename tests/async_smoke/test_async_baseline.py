@@ -423,6 +423,14 @@ class TestAsyncUnitProxyWrapping:
         def self_unit(self):
             return self
 
+    class _ArgumentUnit:
+        def __init__(self):
+            self.received = None
+
+        def receive(self, *args, **kwargs):
+            self.received = (args, kwargs)
+            return self
+
     @pytest.mark.asyncio
     async def test_page_unit_owner_return_stays_async(self):
         from ruyipage._async._generated import AsyncFirefoxPage
@@ -454,6 +462,78 @@ class TestAsyncUnitProxyWrapping:
         assert await element.wait.self_unit() is element.wait
         assert element.wait._owner is element
         assert await element.wait() is element
+
+    @pytest.mark.asyncio
+    async def test_unit_proxy_unwraps_async_arguments(self):
+        from ruyipage._async._generated import AsyncFirefoxElement, AsyncUnitProxy
+
+        sync_element = object()
+        element = AsyncFirefoxElement(sync_element)
+        domain_value = type("DomainValue", (), {"_sync": object()})()
+        sync_unit = self._ArgumentUnit()
+        unit = AsyncUnitProxy(sync_unit)
+
+        result = await unit.receive(
+            element,
+            keyword=element,
+            passthrough=domain_value,
+        )
+
+        assert sync_unit.received == (
+            (sync_element,),
+            {"keyword": sync_element, "passthrough": domain_value},
+        )
+        assert result is unit
+
+    @pytest.mark.asyncio
+    async def test_generated_element_method_unwraps_async_target(self):
+        from ruyipage._async._generated import AsyncFirefoxElement
+
+        class SyncElement:
+            def __init__(self):
+                self.received = None
+
+            def drag_to(self, target, duration=0.5):
+                self.received = (target, duration)
+                return self
+
+        sync_source = SyncElement()
+        sync_target = object()
+        source = AsyncFirefoxElement(sync_source)
+        target = AsyncFirefoxElement(sync_target)
+
+        result = await source.drag_to(target, duration=0.25)
+
+        assert sync_source.received == (sync_target, 0.25)
+        assert result is source
+
+    @pytest.mark.asyncio
+    async def test_generated_page_method_unwraps_wrappers_inside_containers(self):
+        from ruyipage._async._generated import AsyncFirefoxPage, AsyncFirefoxTab
+
+        class SyncPage:
+            def __init__(self):
+                self.received = None
+
+            def close_other_tabs(self, tab_or_ids=None):
+                self.received = tab_or_ids
+
+        sync_page = SyncPage()
+        sync_tab = object()
+        tab = AsyncFirefoxTab(sync_tab)
+        domain_value = type("DomainValue", (), {"_sync": object()})()
+        metadata = {"domain": domain_value}
+        page = AsyncFirefoxPage(sync_page)
+
+        await page.close_other_tabs([tab, metadata])
+
+        assert sync_page.received == [sync_tab, metadata]
+        assert sync_page.received[1] is metadata
+
+        await page.close_other_tabs((tab, metadata))
+
+        assert sync_page.received == (sync_tab, metadata)
+        assert sync_page.received[1] is metadata
 
 
 class TestAsyncGeneratedReturnWrapping:

@@ -113,6 +113,20 @@ async def test_async_click_and_input(async_page, fixture_page_url):
 # ── 表单控件（对标 test_form_controls.py）──────────────────────────────────
 
 
+async def test_async_actions_accept_async_element(async_page, fixture_page_url):
+    await async_page.get(fixture_page_url("basic_form.html"))
+
+    input_el = await async_page.ele("#text-input")
+    actions = async_page.actions
+
+    assert await actions.move_to(input_el) is actions
+    assert await actions.click() is actions
+    assert await actions.type("actions async") is actions
+    assert await actions.perform() is actions
+
+    assert await input_el.get_value() == "actions async"
+
+
 async def test_async_form_controls(async_page, fixture_page_url):
     """对标 test_form_controls_behave_correctly"""
     await async_page.get(fixture_page_url("form_controls.html"))
@@ -163,6 +177,15 @@ async def test_async_run_js_with_args(async_page):
     """验证 JS 执行支持参数传递。"""
     result = await async_page.run_js("return arguments[0] + arguments[1]", 3, 4)
     assert result == 7
+
+
+async def test_async_run_js_with_async_element_arg(async_page, fixture_page_url):
+    await async_page.get(fixture_page_url("basic_form.html"))
+    element = await async_page.ele("#text-input")
+
+    result = await async_page.run_js("(element) => element.id", element)
+
+    assert result == "text-input"
 
 
 # ── 截图测试 ──────────────────────────────────────────────────────────────
