@@ -476,7 +476,27 @@ def _unwrap_async_argument(value):
         AsyncFirefoxBase,
         AsyncFirefoxElement,
     )
-    return value._sync if isinstance(value, wrapper_types) else value
+    if isinstance(value, wrapper_types):
+        return value._sync
+
+    if type(value) is list:
+        items = [_unwrap_async_argument(item) for item in value]
+        return value if all(a is b for a, b in zip(items, value)) else items
+    if type(value) is tuple:
+        items = tuple(_unwrap_async_argument(item) for item in value)
+        return value if all(a is b for a, b in zip(items, value)) else items
+    if type(value) is dict:
+        items = [
+            (key, _unwrap_async_argument(item))
+            for key, item in value.items()
+        ]
+        if all(
+            new_item is item
+            for (_, new_item), (_, item) in zip(items, value.items())
+        ):
+            return value
+        return dict(items)
+    return value
 
 
 async def greenlet_spawn(fn, *args, **kwargs):

@@ -179,6 +179,15 @@ async def test_async_run_js_with_args(async_page):
     assert result == 7
 
 
+async def test_async_run_js_with_async_element_arg(async_page, fixture_page_url):
+    await async_page.get(fixture_page_url("basic_form.html"))
+    element = await async_page.ele("#text-input")
+
+    result = await async_page.run_js("(element) => element.id", element)
+
+    assert result == "text-input"
+
+
 # ── 截图测试 ──────────────────────────────────────────────────────────────
 
 

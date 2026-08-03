@@ -84,6 +84,28 @@ async def test_async_actions_human_move_uses_wrapped_element_center():
 
 @pytest.mark.asyncio
 @pytest.mark.feature
+async def test_async_actions_drag_to_unwraps_source_and_target_elements():
+    from ruyipage._async._generated import AsyncFirefoxElement, AsyncUnitProxy
+
+    actions = Actions(_DummyOwner())
+    source = AsyncFirefoxElement(
+        _DummyElement([(120, 80)], in_viewport=True)
+    )
+    target = AsyncFirefoxElement(
+        _DummyElement([(480, 320)], in_viewport=True)
+    )
+    async_actions = AsyncUnitProxy(actions)
+
+    result = await async_actions.drag_to(source, target, steps=4)
+
+    moves = [a for a in actions._pointer_actions if a.get("type") == "pointerMove"]
+    assert result is async_actions
+    assert (moves[0]["x"], moves[0]["y"]) == (120, 80)
+    assert (moves[-1]["x"], moves[-1]["y"]) == (480, 320)
+
+
+@pytest.mark.asyncio
+@pytest.mark.feature
 async def test_async_touch_move_uses_wrapped_element_center():
     from ruyipage._async._generated import AsyncFirefoxElement, AsyncUnitProxy
     from ruyipage._units.touch_actions import TouchActions

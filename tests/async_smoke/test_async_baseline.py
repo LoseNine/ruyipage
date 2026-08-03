@@ -427,8 +427,8 @@ class TestAsyncUnitProxyWrapping:
         def __init__(self):
             self.received = None
 
-        def receive(self, positional, *, keyword, passthrough):
-            self.received = (positional, keyword, passthrough)
+        def receive(self, *args, **kwargs):
+            self.received = (args, kwargs)
             return self
 
     @pytest.mark.asyncio
@@ -479,7 +479,10 @@ class TestAsyncUnitProxyWrapping:
             passthrough=domain_value,
         )
 
-        assert sync_unit.received == (sync_element, sync_element, domain_value)
+        assert sync_unit.received == (
+            (sync_element,),
+            {"keyword": sync_element, "passthrough": domain_value},
+        )
         assert result is unit
 
     @pytest.mark.asyncio
@@ -503,6 +506,34 @@ class TestAsyncUnitProxyWrapping:
 
         assert sync_source.received == (sync_target, 0.25)
         assert result is source
+
+    @pytest.mark.asyncio
+    async def test_generated_page_method_unwraps_wrappers_inside_containers(self):
+        from ruyipage._async._generated import AsyncFirefoxPage, AsyncFirefoxTab
+
+        class SyncPage:
+            def __init__(self):
+                self.received = None
+
+            def close_other_tabs(self, tab_or_ids=None):
+                self.received = tab_or_ids
+
+        sync_page = SyncPage()
+        sync_tab = object()
+        tab = AsyncFirefoxTab(sync_tab)
+        domain_value = type("DomainValue", (), {"_sync": object()})()
+        metadata = {"domain": domain_value}
+        page = AsyncFirefoxPage(sync_page)
+
+        await page.close_other_tabs([tab, metadata])
+
+        assert sync_page.received == [sync_tab, metadata]
+        assert sync_page.received[1] is metadata
+
+        await page.close_other_tabs((tab, metadata))
+
+        assert sync_page.received == (sync_tab, metadata)
+        assert sync_page.received[1] is metadata
 
 
 class TestAsyncGeneratedReturnWrapping:
