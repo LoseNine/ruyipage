@@ -113,6 +113,20 @@ async def test_async_click_and_input(async_page, fixture_page_url):
 # ── 表单控件（对标 test_form_controls.py）──────────────────────────────────
 
 
+async def test_async_actions_accept_async_element(async_page, fixture_page_url):
+    await async_page.get(fixture_page_url("basic_form.html"))
+
+    input_el = await async_page.ele("#text-input")
+    actions = async_page.actions
+
+    assert await actions.move_to(input_el) is actions
+    assert await actions.click() is actions
+    assert await actions.type("actions async") is actions
+    assert await actions.perform() is actions
+
+    assert await input_el.get_value() == "actions async"
+
+
 async def test_async_form_controls(async_page, fixture_page_url):
     """对标 test_form_controls_behave_correctly"""
     await async_page.get(fixture_page_url("form_controls.html"))
