@@ -7,9 +7,13 @@ The bundled JSON data files are used as-is to exercise the loader.
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
+import json
 import os
 import random
-from typing import Any, Dict, List
+from collections.abc import Awaitable as AwaitableABC
+from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 from unittest import mock
 
 import pytest
@@ -61,9 +65,10 @@ def _make_geo(**overrides: Any) -> GeoInfo:
 class _StubOptions:
     """Drop-in stand-in for ``FirefoxOptions`` recording every mutation."""
 
-    def __init__(self, fail_on: List[str] = None):
+    def __init__(self, fail_on: List[str] = None, browser_path: str = None):
         self.calls: List[tuple] = []
         self.fail_on = set(fail_on or [])
+        self.browser_path = browser_path
 
     def _record(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -78,6 +83,9 @@ class _StubOptions:
 
     def set_fpfile(self, path: str) -> None:
         self._record("set_fpfile", path)
+
+    def set_argument(self, argument: str) -> None:
+        self._record("set_argument", argument)
 
     def set_window_size(self, w: int, h: int) -> None:
         self._record("set_window_size", w, h)
@@ -113,6 +121,18 @@ def test_bundled_region_locales_load_ok():
     # case-insensitive + fallback to _default
     fallback = get_country_profile("zz")
     assert fallback.country_code == "_default"
+
+
+def test_bundled_language_tags_match_accept_language_tags():
+    data = builder._load_region_locales(builder.default_region_locales_path())
+
+    for country_code, entry in data["countries"].items():
+        language_tags = [part.strip() for part in entry["language"].split(",")]
+        accept_tags = [
+            part.split(";", 1)[0].strip()
+            for part in entry["accept_language"].split(",")
+        ]
+        assert language_tags == accept_tags, country_code
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +346,25 @@ def test_fetch_geo_info_all_sources_fail():
             fetch_geo_info(timeout=0.5, retries_per_source=0)
 
 
+def test_fetch_geo_info_propagates_fingerprint_config_error():
+    payload = {
+        "ip": "203.0.113.10",
+        "country_code": "US",
+        "country": "United States",
+        "region": "California",
+        "city": "Los Angeles",
+        "timezone": "America/Los_Angeles",
+        "latitude": 34.0522,
+        "longitude": -118.2437,
+    }
+    error = FingerprintConfigError("iana_timezones.json not found")
+
+    with mock.patch.object(builder, "_http_get_json", return_value=payload), \
+            mock.patch.object(builder, "_validate_geo", side_effect=error):
+        with pytest.raises(FingerprintConfigError, match="iana_timezones"):
+            fetch_geo_info(timeout=0.5, retries_per_source=0)
+
+
 def test_coerce_manual_geo_from_mapping():
     geo = coerce_manual_geo({
         "ip": "75.166.187.10",
@@ -358,6 +397,24 @@ def test_coerce_manual_geo_enforces_required_country():
             "latitude": 43.6532,
             "longitude": -79.3832,
         }, require_country="US")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"ip": "not-an-ip"},
+        {"ipv6": "192.0.2.1"},
+        {"timezone": "America/Definitely_Fake"},
+        {"latitude": 90.1},
+        {"longitude": float("inf")},
+    ],
+)
+def test_coerce_manual_geo_wraps_validation_failures_as_geo_error(overrides):
+    value = dataclasses.asdict(_make_geo())
+    value.update(overrides)
+
+    with pytest.raises(GeoError):
+        coerce_manual_geo(value)
 
 
 # ---------------------------------------------------------------------------
@@ -401,9 +458,85 @@ def test_pick_fingerprint_deterministic_with_seed():
     fp_b = pick_fingerprint(geo, rng=rng_b)
     assert fp_a.profile_id == fp_b.profile_id
     assert fp_a.canvas_seed == fp_b.canvas_seed
-    assert fp_a.firefox_version >= 149  # 151 ±2
+    assert fp_a.audio_seed == fp_b.audio_seed
+    assert 1 <= fp_a.canvas_seed <= (1 << 64) - 1
+    assert 1 <= fp_a.audio_seed <= (1 << 64) - 1
+    assert fp_a.audio_seed != fp_a.canvas_seed
+    assert fp_a.firefox_version == 155
     assert "Firefox/{}.0".format(fp_a.firefox_version) in fp_a.useragent
     assert isinstance(fp_a.hardware, HardwareProfile)
+
+
+def test_pick_fingerprint_uses_exact_requested_firefox_major():
+    fp = pick_fingerprint(
+        _make_geo(),
+        firefox_version=155,
+        rng=random.Random(42),
+    )
+
+    assert fp.firefox_version == 155
+    assert "rv:155.0" in fp.useragent
+    assert "Firefox/155.0" in fp.useragent
+
+
+def test_pick_fingerprint_does_not_jitter_firefox_major_version():
+    versions = {
+        pick_fingerprint(_make_geo(), rng=random.Random(seed)).firefox_version
+        for seed in range(20)
+    }
+
+    assert versions == {155}
+
+
+def test_pick_fingerprint_missing_base_version_falls_back_to_155(tmp_path):
+    with open(builder.default_fingerprints_path(), encoding="utf-8") as source:
+        fingerprint_data = json.load(source)
+    fingerprint_data.pop("firefox_base_version")
+    fingerprint_path = tmp_path / "fingerprints.json"
+    fingerprint_path.write_text(json.dumps(fingerprint_data), encoding="utf-8")
+
+    profile = pick_fingerprint(
+        _make_geo(),
+        fingerprints_path=str(fingerprint_path),
+        rng=random.Random(42),
+    )
+
+    assert profile.firefox_version == 155
+
+
+def test_fingerprint_profile_legacy_constructor_derives_audio_seed():
+    hardware = list_hardware_profiles()[0]
+    country = get_country_profile("US")
+    profile = FingerprintProfile(
+        "legacy",
+        151,
+        "Mozilla/5.0 Firefox/151.0",
+        hardware,
+        country,
+        175,
+        country.language_primary,
+        country.accept_language,
+    )
+
+    assert profile.language_primary == country.language_primary
+    assert profile.accept_language == country.accept_language
+    assert isinstance(profile.audio_seed, int)
+    assert 1 <= profile.audio_seed < (1 << 64)
+    assert profile.audio_seed != profile.canvas_seed
+
+
+def test_detect_firefox_major_version_from_binary_output():
+    completed = mock.Mock(stdout="Mozilla Firefox 155.0a1\n", stderr="")
+    with mock.patch.object(builder.subprocess, "run", return_value=completed) as run:
+        assert builder._detect_firefox_major_version("C:/firefox/firefox.exe") == 155
+
+    run.assert_called_once()
+
+
+def test_detect_firefox_major_version_returns_none_for_unknown_output():
+    completed = mock.Mock(stdout="unexpected", stderr="")
+    with mock.patch.object(builder.subprocess, "run", return_value=completed):
+        assert builder._detect_firefox_major_version("C:/firefox/firefox.exe") is None
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +547,17 @@ def test_write_fpfile_schema(tmp_path):
     geo = _make_geo(ipv6="2001:db8::1")
     fp = pick_fingerprint(geo, rng=random.Random(1))
     out = tmp_path / "fpfile.txt"
-    write_fpfile(str(out), geo, fp, proxy_user="u", proxy_pwd="p")
+    write_fpfile(
+        str(out),
+        geo,
+        fp,
+        proxy_user="u",
+        proxy_pwd="p",
+        webrtc_local_ipv4="192.0.2.10",
+        webrtc_local_ipv6="2001:db8::10",
+        webrtc_public_ipv4="198.51.100.10",
+        webrtc_public_ipv6="2001:db8::20",
+    )
 
     text = out.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -435,6 +578,16 @@ def test_write_fpfile_schema(tmp_path):
         "public_webrtc_ipv6",
         "timezone",
         "language",
+        "geolocation.enabled",
+        "geolocation.latitude",
+        "geolocation.longitude",
+        "geolocation.accuracy",
+        "geolocation.altitude",
+        "geolocation.altitudeAccuracy",
+        "geolocation.heading",
+        "geolocation.speed",
+        "geolocation.timestamp",
+        "geolocation.permission",
         "speech.voices.local",
         "speech.voices.remote",
         "speech.voices.local.langs",
@@ -456,7 +609,13 @@ def test_write_fpfile_schema(tmp_path):
         "webgl.max_vertex_attribs",
         "webgl.aliased_point_size_max",
         "webgl.max_viewport_dim",
-        "canvas",
+        "canvas.mode",
+        "canvas.seed",
+        "canvas.strength",
+        "canvas.preserveAlpha",
+        "canvas.preserveWhitePoint",
+        "canvas.pngMetadata",
+        "audio.seed",
         "httpauth.username",
         "httpauth.password",
     ]
@@ -468,22 +627,38 @@ def test_write_fpfile_schema(tmp_path):
 
     # --- spot-check representative values ---
     assert lines[0] == "webdriver:0"
-    assert any(line.startswith("local_webrtc_ipv4:203.0.113.45") for line in lines)
-    assert any(line.startswith("local_webrtc_ipv6:2001:db8::1") for line in lines)
-    assert any(line.startswith("public_webrtc_ipv4:203.0.113.45") for line in lines)
-    assert any(line.startswith("public_webrtc_ipv6:2001:db8::1") for line in lines)
+    assert "local_webrtc_ipv4:192.0.2.10" in lines
+    assert "local_webrtc_ipv6:2001:db8::10" in lines
+    assert "public_webrtc_ipv4:198.51.100.10" in lines
+    assert "public_webrtc_ipv6:2001:db8::20" in lines
     assert any(line.startswith("timezone:America/Los_Angeles") for line in lines)
+    assert "geolocation.enabled:true" in lines
+    assert "geolocation.latitude:34.0522" in lines
+    assert "geolocation.longitude:-118.2437" in lines
+    assert "geolocation.accuracy:15000" in lines
+    assert "geolocation.altitude:null" in lines
+    assert "geolocation.altitudeAccuracy:null" in lines
+    assert "geolocation.heading:null" in lines
+    assert "geolocation.speed:null" in lines
+    assert "geolocation.timestamp:now" in lines
+    assert "geolocation.permission:granted" in lines
     assert any(line.startswith("useragent:Mozilla/5.0") for line in lines)
-    assert any(line.startswith("canvas:") for line in lines)
+    assert "canvas.mode:pixel" in lines
+    assert "canvas.seed:{}".format(fp.canvas_seed) in lines
+    assert "canvas.strength:low" in lines
+    assert "canvas.preserveAlpha:true" in lines
+    assert "canvas.preserveWhitePoint:true" in lines
+    assert "canvas.pngMetadata:false" in lines
+    assert "audio.seed:{}".format(fp.audio_seed) in lines
     assert any(line == "httpauth.username:u" for line in lines)
     assert any(line == "httpauth.password:p" for line in lines)
     assert not any(line.startswith("width:") for line in lines)
     assert not any(line.startswith("height:") for line in lines)
 
 
-def test_write_fpfile_no_ipv6_no_auth(tmp_path):
-    """When IPv6 is absent and no proxy auth, those keys must be omitted."""
-    geo = _make_geo(ipv6=None)
+def test_write_fpfile_default_omits_webrtc_overrides_and_auth(tmp_path):
+    """Geo lookup data must not be guessed into ICE policy overrides."""
+    geo = _make_geo(ipv6="2001:db8::1")
     fp = pick_fingerprint(geo, rng=random.Random(1))
     out = tmp_path / "fpfile.txt"
     write_fpfile(str(out), geo, fp)
@@ -491,8 +666,10 @@ def test_write_fpfile_no_ipv6_no_auth(tmp_path):
     text = out.read_text(encoding="utf-8")
     actual_keys = [line.split(":", 1)[0] for line in text.strip().splitlines()]
 
-    # IPv6 keys must not appear
+    # Native WebRTC policy remains enabled only when the caller opts in.
+    assert "local_webrtc_ipv4" not in actual_keys
     assert "local_webrtc_ipv6" not in actual_keys
+    assert "public_webrtc_ipv4" not in actual_keys
     assert "public_webrtc_ipv6" not in actual_keys
     # httpauth keys must not appear
     assert "httpauth.host" not in actual_keys
@@ -500,13 +677,21 @@ def test_write_fpfile_no_ipv6_no_auth(tmp_path):
     assert "httpauth.username" not in actual_keys
     assert "httpauth.password" not in actual_keys
 
-    # Core keys still in correct order (no IPv6 gaps)
+    # Core keys still preserve their deterministic order.
     expected_core_keys = [
         "webdriver",
-        "local_webrtc_ipv4",
-        "public_webrtc_ipv4",
         "timezone",
         "language",
+        "geolocation.enabled",
+        "geolocation.latitude",
+        "geolocation.longitude",
+        "geolocation.accuracy",
+        "geolocation.altitude",
+        "geolocation.altitudeAccuracy",
+        "geolocation.heading",
+        "geolocation.speed",
+        "geolocation.timestamp",
+        "geolocation.permission",
         "speech.voices.local",
         "speech.voices.remote",
         "speech.voices.local.langs",
@@ -528,23 +713,237 @@ def test_write_fpfile_no_ipv6_no_auth(tmp_path):
         "webgl.max_vertex_attribs",
         "webgl.aliased_point_size_max",
         "webgl.max_viewport_dim",
-        "canvas",
+        "canvas.mode",
+        "canvas.seed",
+        "canvas.strength",
+        "canvas.preserveAlpha",
+        "canvas.preserveWhitePoint",
+        "canvas.pngMetadata",
+        "audio.seed",
     ]
     assert actual_keys == expected_core_keys
     assert not any(key in ("width", "height") for key in actual_keys)
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("webrtc_local_ipv4", "2001:db8::10"),
+        ("webrtc_public_ipv4", "not-an-ip"),
+        ("webrtc_local_ipv6", "192.0.2.10"),
+        ("webrtc_public_ipv6", "2001:db8::10%7"),
+    ],
+)
+def test_write_fpfile_rejects_invalid_webrtc_override_family(
+    tmp_path, keyword, value
+):
+    geo = _make_geo()
+    fp = pick_fingerprint(geo, rng=random.Random(1))
+
+    with pytest.raises(FingerprintError, match=keyword):
+        write_fpfile(
+            str(tmp_path / "fp.txt"),
+            geo,
+            fp,
+            **{keyword: value},
+        )
 
 
 # ---------------------------------------------------------------------------
 # 10) write_fpfile: extra cannot collide with reserved keys
 # ---------------------------------------------------------------------------
 
-def test_write_fpfile_extra_collision_rejected(tmp_path):
+@pytest.mark.parametrize(
+    "reserved_key",
+    [
+        "useragent",
+        "canvas",
+        "canvas.enabled",
+        "canvas.scope",
+        "canvas.mode",
+        "canvas.seed",
+        "canvas.strength",
+        "canvas.preserveAlpha",
+        "canvas.preserveWhitePoint",
+        "canvas.pngMetadata",
+        "audio",
+        "audio.enabled",
+        "audio.mode",
+        "audio.scope",
+        "audio.seed",
+        "geolocation.enabled",
+        "geolocation.latitude",
+        "geolocation.longitude",
+        "geolocation.accuracy",
+        "geolocation.altitude",
+        "geolocation.altitudeAccuracy",
+        "geolocation.heading",
+        "geolocation.speed",
+        "geolocation.timestamp",
+        "geolocation.permission",
+        "socksauth.host",
+        "socksauth.port",
+        "socksauth.username",
+        "socksauth.password",
+    ],
+)
+def test_write_fpfile_extra_collision_rejected(tmp_path, reserved_key):
     geo = _make_geo()
     fp = pick_fingerprint(geo, rng=random.Random(1))
     with pytest.raises(FingerprintError):
         write_fpfile(
             str(tmp_path / "fp.txt"), geo, fp,
-            extra={"useragent": "evil"},
+            extra={reserved_key: "evil"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("extra_key", "extra_value"),
+    [
+        (" canvas.seed", "1"),
+        ("canvas.seed ", "1"),
+        ("canvas.seed:ignored", "1"),
+        ("canvas.seed=ignored", "1"),
+        ("note\ncanvas.seed", "1"),
+        ("note", "value\ncanvas.seed:1"),
+    ],
+)
+def test_write_fpfile_extra_injection_rejected(
+    tmp_path, extra_key, extra_value
+):
+    geo = _make_geo()
+    fp = pick_fingerprint(geo, rng=random.Random(1))
+    with pytest.raises(FingerprintError):
+        write_fpfile(
+            str(tmp_path / "fp.txt"),
+            geo,
+            fp,
+            extra={extra_key: extra_value},
+        )
+
+
+@pytest.mark.parametrize(
+    "canvas_seed",
+    [0, -1, 1 << 64, True, 1.5, "1", None],
+)
+def test_write_fpfile_rejects_invalid_canvas_seed(tmp_path, canvas_seed):
+    geo = _make_geo()
+    fp = dataclasses.replace(
+        pick_fingerprint(geo, rng=random.Random(1)), canvas_seed=canvas_seed
+    )
+    with pytest.raises(FingerprintError, match="canvas_seed"):
+        write_fpfile(str(tmp_path / "fp.txt"), geo, fp)
+
+
+def test_write_fpfile_accepts_max_canvas_seed(tmp_path):
+    geo = _make_geo()
+    fp = dataclasses.replace(
+        pick_fingerprint(geo, rng=random.Random(1)),
+        canvas_seed=(1 << 64) - 1,
+    )
+    path = tmp_path / "fp.txt"
+    write_fpfile(str(path), geo, fp)
+    assert "canvas.seed:18446744073709551615" in path.read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+
+@pytest.mark.parametrize(
+    "audio_seed",
+    [0, -1, 1 << 64, True, 1.5, "1", None],
+)
+def test_write_fpfile_rejects_invalid_audio_seed(tmp_path, audio_seed):
+    geo = _make_geo()
+    fp = dataclasses.replace(
+        pick_fingerprint(geo, rng=random.Random(1)), audio_seed=audio_seed
+    )
+    with pytest.raises(FingerprintError, match="audio_seed"):
+        write_fpfile(str(tmp_path / "fp.txt"), geo, fp)
+
+
+def test_write_fpfile_accepts_max_audio_seed(tmp_path):
+    geo = _make_geo()
+    fp = dataclasses.replace(
+        pick_fingerprint(geo, rng=random.Random(1)),
+        audio_seed=(1 << 64) - 1,
+    )
+    path = tmp_path / "fp.txt"
+    write_fpfile(str(path), geo, fp)
+    assert "audio.seed:18446744073709551615" in path.read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+
+def test_write_fpfile_accepts_explicit_geolocation_fields(tmp_path):
+    geo = _make_geo()
+    fp = pick_fingerprint(geo, rng=random.Random(1))
+    path = tmp_path / "fp.txt"
+    write_fpfile(
+        str(path),
+        geo,
+        fp,
+        geolocation_enabled=False,
+        geolocation_latitude=-90,
+        geolocation_longitude=180,
+        geolocation_accuracy=0.25,
+        geolocation_altitude=-12.5,
+        geolocation_altitude_accuracy=0,
+        geolocation_heading=359.5,
+        geolocation_speed=0.1,
+        geolocation_timestamp=0,
+        geolocation_permission="denied",
+    )
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert [line for line in lines if line.startswith("geolocation.")] == [
+        "geolocation.enabled:false",
+        "geolocation.latitude:-90",
+        "geolocation.longitude:180",
+        "geolocation.accuracy:0.25",
+        "geolocation.altitude:-12.5",
+        "geolocation.altitudeAccuracy:0",
+        "geolocation.heading:359.5",
+        "geolocation.speed:0.1",
+        "geolocation.timestamp:0",
+        "geolocation.permission:denied",
+    ]
+
+
+@pytest.mark.parametrize(
+    "geolocation_kwargs",
+    [
+        {"geolocation_enabled": 1},
+        {"geolocation_latitude": True},
+        {"geolocation_latitude": -90.0001},
+        {"geolocation_latitude": float("nan")},
+        {"geolocation_longitude": -180.0001},
+        {"geolocation_longitude": float("inf")},
+        {"geolocation_accuracy": 0},
+        {"geolocation_accuracy": float("inf")},
+        {"geolocation_altitude": True},
+        {"geolocation_altitude": float("nan")},
+        {"geolocation_altitude_accuracy": -1},
+        {"geolocation_altitude_accuracy": 1},
+        {"geolocation_heading": -1, "geolocation_speed": 1},
+        {"geolocation_heading": 360, "geolocation_speed": 1},
+        {"geolocation_heading": 0},
+        {"geolocation_heading": 0, "geolocation_speed": 0},
+        {"geolocation_speed": -1},
+        {"geolocation_timestamp": True},
+        {"geolocation_timestamp": -1},
+        {"geolocation_timestamp": 1 << 64},
+        {"geolocation_timestamp": "later"},
+        {"geolocation_permission": "GRANTED"},
+        {"geolocation_permission": "allow"},
+    ],
+)
+def test_write_fpfile_rejects_invalid_geolocation_fields(
+    tmp_path, geolocation_kwargs
+):
+    geo = _make_geo()
+    fp = pick_fingerprint(geo, rng=random.Random(1))
+    with pytest.raises(FingerprintError, match="geolocation"):
+        write_fpfile(
+            str(tmp_path / "fp.txt"), geo, fp, **geolocation_kwargs
         )
 
 
@@ -562,10 +961,19 @@ def test_fingerprint_context_helpers():
 
     s = ctx.summary()
     assert "[fp]" in s and "Firefox/" in s and "ipv6=yes" in s
+    assert "audio={}".format(fp.audio_seed) in s
 
     d = ctx.to_dict()
     assert d["country_code"] == "US"
     assert d["firefox_version"] == fp.firefox_version
+    assert d["audio_seed"] == fp.audio_seed
+    assert d["webrtc"] == {
+        "mode": "native",
+        "local_ipv4": None,
+        "local_ipv6": None,
+        "public_ipv4": None,
+        "public_ipv6": None,
+    }
 
     # apply_emulation: stub page with all four hooks
     class _Emu:
@@ -595,8 +1003,12 @@ def test_fingerprint_context_helpers():
     result = ctx.apply_emulation(page)
     assert result == {"geolocation": True, "locale": True,
                       "timezone": True, "headers": True, "screen": True}
-    assert page.network.headers["Accept-Language"] == fp.accept_language
+    assert page.network.headers == {
+        "Accept-Language": fp.accept_language,
+    }
     assert page.emulation.calls[0] == ("screen", fp.hardware.width, fp.hardware.height)
+    assert ("geo", geo.latitude, geo.longitude, 15000) in page.emulation.calls
+    assert ("loc", tuple(fp.country.language.split(","))) in page.emulation.calls
 
     # missing hooks degrade gracefully (e.g. older ruyipage builds)
     class _BarePage:
@@ -630,6 +1042,178 @@ def test_fingerprint_context_helpers():
     assert flaky_page.emulation.calls[0][0] == "geo"
 
 
+@pytest.mark.asyncio
+async def test_fingerprint_context_apply_emulation_awaits_async_page_hooks():
+    geo = _make_geo(country_code="MX", timezone="America/Mexico_City")
+    fp = pick_fingerprint(geo, rng=random.Random(7))
+    ctx = FingerprintContext(
+        geo=geo, fingerprint=fp,
+        userdir="/tmp/x", fpfile_path="/tmp/x/fp.txt",
+    )
+
+    class _AsyncEmu:
+        def __init__(self):
+            self.calls = []
+
+        async def set_screen_size(self, width, height):
+            self.calls.append(("screen", width, height))
+
+        async def set_geolocation(self, lat, lon, accuracy=100):
+            self.calls.append(("geo", lat, lon, accuracy))
+
+        async def set_locale(self, langs):
+            self.calls.append(("loc", tuple(langs)))
+
+        async def set_timezone(self, tz):
+            self.calls.append(("tz", tz))
+
+    class _AsyncNet:
+        def __init__(self):
+            self.headers = None
+
+        async def set_extra_headers(self, headers):
+            self.headers = dict(headers)
+
+    class _AsyncPage:
+        def __init__(self):
+            self.emulation = _AsyncEmu()
+            self.network = _AsyncNet()
+
+    page = _AsyncPage()
+    pending = ctx.apply_emulation(page)
+    assert inspect.isawaitable(pending)
+    result = await pending
+
+    assert result == {"geolocation": True, "locale": True,
+                      "timezone": True, "headers": True, "screen": True}
+    assert ("geo", geo.latitude, geo.longitude, 15000) in page.emulation.calls
+    assert ("loc", tuple(fp.country.language.split(","))) in page.emulation.calls
+    assert page.network.headers == {
+        "Accept-Language": fp.accept_language,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_context_apply_emulation_handles_mixed_hooks():
+    geo = _make_geo(country_code="DE", timezone="Europe/Berlin")
+    fp = pick_fingerprint(geo, rng=random.Random(7))
+    ctx = FingerprintContext(
+        geo=geo,
+        fingerprint=fp,
+        userdir="/tmp/x",
+        fpfile_path="/tmp/x/fp.txt",
+    )
+    calls = []
+
+    class _MixedEmu:
+        def set_screen_size(self, width, height):
+            calls.append(("screen", width, height))
+
+        async def set_geolocation(self, latitude, longitude, accuracy=100):
+            calls.append(("geolocation", latitude, longitude, accuracy))
+
+        def set_locale(self, locales):
+            calls.append(("locale", tuple(locales)))
+
+        async def set_timezone(self, timezone):
+            calls.append(("timezone", timezone))
+
+    class _MixedNetwork:
+        def set_extra_headers(self, headers):
+            calls.append(("headers", dict(headers)))
+
+    class _MixedPage:
+        emulation = _MixedEmu()
+        network = _MixedNetwork()
+
+    result = await ctx.apply_emulation_async(_MixedPage())
+
+    assert result == {
+        "screen": True,
+        "geolocation": True,
+        "locale": True,
+        "timezone": True,
+        "headers": True,
+    }
+    assert [call[0] for call in calls] == [
+        "screen",
+        "geolocation",
+        "locale",
+        "timezone",
+        "headers",
+    ]
+
+
+def test_fingerprint_context_apply_emulation_declares_sync_and_async_results():
+    return_hint = get_type_hints(FingerprintContext.apply_emulation)["return"]
+    return_types = get_args(return_hint)
+
+    assert Dict[str, bool] in return_types
+    awaitable_hint = next(
+        hint
+        for hint in return_types
+        if get_origin(hint) is AwaitableABC
+    )
+    assert get_args(awaitable_hint) == (Dict[str, bool],)
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_context_apply_emulation_async_is_always_awaitable():
+    geo = _make_geo()
+    ctx = FingerprintContext(
+        geo=geo,
+        fingerprint=pick_fingerprint(geo, rng=random.Random(7)),
+        userdir="/tmp/x",
+        fpfile_path="/tmp/x/fp.txt",
+    )
+
+    result = await ctx.apply_emulation_async(
+        object(),
+        set_screen_size=False,
+        set_geolocation=False,
+        set_locale=False,
+        set_timezone=False,
+        set_extra_headers=False,
+    )
+
+    assert result == {
+        "screen": False,
+        "geolocation": False,
+        "locale": False,
+        "timezone": False,
+        "headers": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"latitude": float("nan")},
+        {"longitude": float("inf")},
+        {"latitude": 90.1},
+        {"longitude": -180.1},
+        {"timezone": "not-a-timezone"},
+        {"timezone": "Etc/Unknown"},
+        {"timezone": "Factory"},
+    ],
+)
+def test_validate_geo_rejects_invalid_coordinates_and_timezone(overrides):
+    with pytest.raises(ValueError):
+        builder._validate_geo(_make_geo(**overrides))
+
+
+def test_geo_parser_rejects_missing_coordinates_instead_of_defaulting_to_zero():
+    with pytest.raises((KeyError, ValueError, TypeError)):
+        builder._PARSERS["ipapi"]({
+            "ip": "203.0.113.10",
+            "country": "US",
+            "country_name": "United States",
+            "region": "CA",
+            "city": "LA",
+            "timezone": "America/Los_Angeles",
+        })
+
+
 # ---------------------------------------------------------------------------
 # 12) apply_smart_fingerprint: full pipeline with mocks
 # ---------------------------------------------------------------------------
@@ -647,6 +1231,8 @@ def test_apply_smart_fingerprint_full_pipeline(tmp_path):
             proxy_user="u", proxy_pwd="p",
             base_dir=str(tmp_path),
             require_country="US",
+            webrtc_local_ipv6="2001:db8::abcd",
+            webrtc_public_ipv6="2001:db8::abcd",
             rng=random.Random(123),
         )
 
@@ -656,9 +1242,9 @@ def test_apply_smart_fingerprint_full_pipeline(tmp_path):
     # Geo got enriched with ipv6
     assert ctx.geo.ipv6 == "2001:db8::abcd"
 
-    # Default window-size mutation is now disabled
+    # Default window-size mutation is disabled; startup stays script-accessible.
     names = [c[0] for c in opts.calls]
-    assert names == ["set_proxy", "set_user_dir", "set_fpfile"]
+    assert names == ["set_proxy", "set_user_dir", "set_fpfile", "set_argument"]
     assert opts.calls[0][1] == ("http://proxy.example.com:8080",)
 
     # fpfile actually written and contains httpauth
@@ -670,11 +1256,246 @@ def test_apply_smart_fingerprint_full_pipeline(tmp_path):
     assert "httpauth.username:u" in text
     assert "httpauth.password:p" in text
     assert "local_webrtc_ipv6:2001:db8::abcd" in text
+    assert "public_webrtc_ipv6:2001:db8::abcd" in text
     assert "width:" not in text
     assert "height:" not in text
 
     # userdir under provided base_dir
     assert os.path.commonpath([ctx.userdir, str(tmp_path)]) == str(tmp_path)
+
+
+def test_apply_smart_fingerprint_uses_detected_browser_major(tmp_path):
+    geo = _make_geo()
+    browser_path = r"C:\firefox\firefox.exe"
+
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None), \
+            mock.patch.object(
+                builder, "_detect_firefox_major_version", return_value=155
+            ) as detect:
+        ctx = apply_smart_fingerprint(
+            _StubOptions(browser_path=browser_path),
+            base_dir=str(tmp_path),
+            require_country="US",
+            fetch_ipv6=False,
+            rng=random.Random(123),
+        )
+
+    detect.assert_called_once_with(browser_path)
+    assert ctx.fingerprint.firefox_version == 155
+    assert "Firefox/155.0" in ctx.fingerprint.useragent
+
+
+def test_apply_smart_fingerprint_sets_script_accessible_start_page(tmp_path):
+    geo = _make_geo()
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        opts = _StubOptions()
+        apply_smart_fingerprint(
+            opts,
+            base_dir=str(tmp_path),
+            require_country=None,
+            fetch_ipv6=False,
+            rng=random.Random(123),
+        )
+
+    assert ("set_argument", ("about:blank",)) in opts.calls
+
+
+def test_apply_smart_fingerprint_can_preserve_custom_start_page(tmp_path):
+    geo = _make_geo()
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        opts = _StubOptions()
+        apply_smart_fingerprint(
+            opts,
+            base_dir=str(tmp_path),
+            require_country=None,
+            fetch_ipv6=False,
+            set_startup_page_on_opts=False,
+            rng=random.Random(123),
+        )
+
+    assert all(call[0] != "set_argument" for call in opts.calls)
+
+
+def test_apply_smart_fingerprint_passes_explicit_webrtc_overrides(tmp_path):
+    geo = _make_geo(ipv6="2001:db8::1")
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        ctx = apply_smart_fingerprint(
+            _StubOptions(),
+            base_dir=str(tmp_path),
+            require_country=None,
+            fetch_ipv6=False,
+            webrtc_local_ipv4="192.0.2.10",
+            webrtc_local_ipv6="2001:0db8:0:0::10",
+            webrtc_public_ipv4="198.51.100.10",
+            webrtc_public_ipv6="2001:0db8:0:0::20",
+            rng=random.Random(123),
+        )
+
+    lines = open(ctx.fpfile_path, encoding="utf-8").read().splitlines()
+    assert "local_webrtc_ipv4:192.0.2.10" in lines
+    assert "local_webrtc_ipv6:2001:db8::10" in lines
+    assert "public_webrtc_ipv4:198.51.100.10" in lines
+    assert "public_webrtc_ipv6:2001:db8::20" in lines
+    assert ctx.webrtc_local_ipv4 == "192.0.2.10"
+    assert ctx.webrtc_local_ipv6 == "2001:db8::10"
+    assert ctx.webrtc_public_ipv4 == "198.51.100.10"
+    assert ctx.webrtc_public_ipv6 == "2001:db8::20"
+    assert ctx.to_dict()["webrtc"] == {
+        "mode": "explicit",
+        "local_ipv4": "192.0.2.10",
+        "local_ipv6": "2001:db8::10",
+        "public_ipv4": "198.51.100.10",
+        "public_ipv6": "2001:db8::20",
+    }
+
+
+def test_apply_smart_fingerprint_keeps_custom_geolocation_for_overlay(tmp_path):
+    geo = _make_geo()
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        ctx = apply_smart_fingerprint(
+            _StubOptions(),
+            base_dir=str(tmp_path),
+            require_country=None,
+            fetch_ipv6=False,
+            geolocation_latitude=40.7128,
+            geolocation_longitude=-74.006,
+            geolocation_accuracy=25,
+            geolocation_altitude=12.5,
+            geolocation_altitude_accuracy=3.5,
+            geolocation_heading=45,
+            geolocation_speed=2.25,
+            geolocation_permission="granted",
+            rng=random.Random(123),
+        )
+
+    assert ctx.geolocation.latitude == 40.7128
+    assert ctx.geolocation.longitude == -74.006
+    assert ctx.geolocation.accuracy == 25
+    assert ctx.geolocation.altitude == 12.5
+    assert ctx.geolocation.altitude_accuracy == 3.5
+    assert ctx.geolocation.heading == 45
+    assert ctx.geolocation.speed == 2.25
+
+    class _Emulation:
+        def __init__(self):
+            self.calls = []
+
+        def set_geolocation(self, latitude, longitude, **kwargs):
+            self.calls.append((latitude, longitude, kwargs))
+
+    class _Page:
+        def __init__(self):
+            self.emulation = _Emulation()
+
+    page = _Page()
+    result = ctx.apply_emulation(
+        page,
+        set_screen_size=False,
+        set_locale=False,
+        set_timezone=False,
+        set_extra_headers=False,
+    )
+
+    assert result["geolocation"] is True
+    assert page.emulation.calls == [
+        (
+            40.7128,
+            -74.006,
+            {
+                "accuracy": 25,
+                "altitude": 12.5,
+                "altitude_accuracy": 3.5,
+                "heading": 45,
+                "speed": 2.25,
+            },
+        )
+    ]
+
+
+def test_fingerprint_context_preserves_custom_timestamp_in_kernel(tmp_path):
+    geo = _make_geo()
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        ctx = apply_smart_fingerprint(
+            _StubOptions(),
+            base_dir=str(tmp_path),
+            require_country=None,
+            fetch_ipv6=False,
+            geolocation_timestamp=123456789,
+            rng=random.Random(123),
+        )
+
+    calls = []
+
+    class _Emulation:
+        def set_geolocation(self, *args, **kwargs):
+            raise AssertionError("fixed timestamp must not receive coordinates")
+
+        def clear_geolocation(self):
+            calls.append("clear")
+
+    class _Page:
+        emulation = _Emulation()
+
+    logs = []
+    result = ctx.apply_emulation(
+        _Page(),
+        set_screen_size=False,
+        set_locale=False,
+        set_timezone=False,
+        set_extra_headers=False,
+        logger=logs.append,
+    )
+
+    assert result["geolocation"] is False
+    assert calls == ["clear"]
+    assert any("custom timestamp is kernel-managed" in line for line in logs)
+
+
+def test_apply_smart_fingerprint_does_not_overlay_disabled_geolocation(tmp_path):
+    geo = _make_geo()
+    with mock.patch.object(builder, "fetch_geo_info", return_value=geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        ctx = apply_smart_fingerprint(
+            _StubOptions(),
+            base_dir=str(tmp_path),
+            require_country=None,
+            fetch_ipv6=False,
+            geolocation_enabled=False,
+            rng=random.Random(123),
+        )
+
+    class _Emulation:
+        def __init__(self):
+            self.calls = []
+
+        def set_geolocation(self, latitude, longitude, accuracy=100):
+            self.calls.append((latitude, longitude, accuracy))
+
+        def clear_geolocation(self):
+            self.calls.append("clear")
+
+    class _Page:
+        def __init__(self):
+            self.emulation = _Emulation()
+
+    page = _Page()
+    result = ctx.apply_emulation(
+        page,
+        set_screen_size=False,
+        set_locale=False,
+        set_timezone=False,
+        set_extra_headers=False,
+    )
+
+    assert ctx.geolocation.enabled is False
+    assert result["geolocation"] is False
+    assert page.emulation.calls == ["clear"]
 
 
 def test_apply_smart_fingerprint_default_keeps_fpfile_size_without_window_mutation(tmp_path):
@@ -691,6 +1512,7 @@ def test_apply_smart_fingerprint_default_keeps_fpfile_size_without_window_mutati
         hardware=hw,
         country=country,
         canvas_seed=175,
+        audio_seed=176,
         language_primary=country.language_primary,
         accept_language=country.accept_language,
     )
@@ -726,6 +1548,7 @@ def test_apply_smart_fingerprint_never_maps_screen_size_to_outer_window(tmp_path
         hardware=hw,
         country=country,
         canvas_seed=175,
+        audio_seed=176,
         language_primary=country.language_primary,
         accept_language=country.accept_language,
     )

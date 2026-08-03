@@ -1772,12 +1772,15 @@ page.get("https://browserleaks.com/webgl")
 ### 流水线说明
 
 1. `build_proxies_dict(...)` — 组装 `requests` 风格的 proxies。
-2. `fetch_geo_info(...)` — 5 数据源回退（geojs / ipapi / ipwho / ip-api /
-   ipinfo）；`require_country` 不匹配立即抛 `CountryMismatchError`。
-3. `fetch_public_ipv6(...)` — best-effort，失败则 `*_webrtc_ipv6` 整行省略。
+2. `fetch_geo_info(...)` — 10 数据源回退；`require_country` 不匹配立即抛
+   `CountryMismatchError`。
+3. `fetch_public_ipv6(...)` — best-effort，仅富化出口诊断信息；不会自动把代理
+   Geo IP 写成 WebRTC ICE 地址。
 4. 自动生成 / 复用 `userdir`，写入符合内核字段顺序的 `fpfile.txt`；不再写入
    `width` / `height`。
-5. `set_window_size_on_opts` 仅为兼容保留且已忽略；智能指纹不会把
+5. 默认向 Options 加入 `about:blank` 启动页，使页面创建后可立即应用 BiDi
+   覆盖且不需要 `remote-allow-system-access`；已有自定义启动页时传
+   `set_startup_page_on_opts=False`。`set_window_size_on_opts` 仅为兼容保留且已忽略；智能指纹不会把
    `screen.width/height` 映射为 Firefox 外窗尺寸。确需设置外窗时，请在创建
    `FirefoxPage` 前由调用方显式调用 `opts.set_window_size(width, height)`。
 6. 返回 `FingerprintContext`：
@@ -1787,20 +1790,25 @@ page.get("https://browserleaks.com/webgl")
      `screen.width` / `screen.height` / `screen.avail*`；`outerWidth` /
      `innerWidth` / viewport 继续由 Firefox 原生维护并随窗口变化。返回结果包含
      `screen`、`geolocation`、`locale`、`timezone`、`headers`；
+   - 异步页面使用 `await ctx.apply_emulation_async(async_page)`；该入口始终可等待；
    - `ctx.to_dict()` — 持久化指纹身份（账号库等）。
 
 ### 内置数据资产
 
 - 22 套 Windows 真机硬件特征（NVIDIA RTX 系 + AMD RX 系 + Intel UHD/Arc）。
 - 30+ 国语言 / Accept-Language / 微软语音映射，含 `_default` 兜底。
-- Firefox 主版本锁定 151，仅在 minor 上 `±2` 抖动，避免 UA 主号穿帮。
+- UA 优先使用 `opts.browser_path` 对应 Firefox 的实际主版本；可执行文件无法查询时
+  才回退到内置基准版本，且不再随机抖动主版本。
+- WebRTC 默认保持 Firefox 原生 ICE，仅在调用方提供真实 ICE 地址时写入显式覆盖。
+  原生 srflx 地址可能不同于 HTTP 代理出口；`local_webrtc_*` 也不会筛除所有其他
+  host candidate。
 
 ### 异常体系
 
 ```
 FingerprintError
 ├── FingerprintConfigError      # 内置 JSON 损坏（部署期错误）
-└── GeoError                    # 5 个 geo 数据源全部失败
+└── GeoError                    # 10 个 geo 数据源全部失败
     └── CountryMismatchError    # 出口 IP 国家与 require_country 不一致
         # 属性：actual / required
 ```

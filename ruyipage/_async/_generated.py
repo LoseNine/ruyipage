@@ -3,7 +3,7 @@
 # │ WARNING: 此文件由 scripts/generate_async_api.py 自动生成          │
 # │ 请勿手动编辑！修改后请重新运行生成器：                               │
 # │   python scripts/generate_async_api.py                          │
-# │ 生成时间: 2026-07-16 15:43:28                                        │
+# │ 生成时间: 2026-08-02 23:52:54                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
 from .greenlet_bridge import greenlet_spawn
@@ -421,7 +421,7 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         _r = await greenlet_spawn(self._sync.remove_preload_script, script_id)
         return _wrap_async_result(_r, self)
 
-    async def respond_prompt(self, accept=True, text=None, timeout=3):
+    async def respond_prompt(self, *, accept=True, text=None, timeout=3):
         _r = await greenlet_spawn(self._sync.respond_prompt, accept=accept, text=text, timeout=timeout)
         return _wrap_async_result(_r, self)
 
@@ -465,15 +465,15 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         await greenlet_spawn(self._sync.set_download_path, path)
         return self
 
-    async def set_geolocation(self, latitude, longitude, accuracy=100):
-        await greenlet_spawn(self._sync.set_geolocation, latitude, longitude, accuracy=accuracy)
+    async def set_geolocation(self, latitude, longitude, accuracy=100, *, altitude=None, altitude_accuracy=None, heading=None, speed=None):
+        await greenlet_spawn(self._sync.set_geolocation, latitude, longitude, accuracy=accuracy, altitude=altitude, altitude_accuracy=altitude_accuracy, heading=heading, speed=speed)
         return self
 
     async def set_locale(self, locales):
         await greenlet_spawn(self._sync.set_locale, locales)
         return self
 
-    async def set_prompt_handler(self, alert='accept', confirm='accept', prompt='ignore', default='accept', prompt_text=None):
+    async def set_prompt_handler(self, *, alert='accept', confirm='accept', prompt='ignore', default='accept', prompt_text=None):
         _r = await greenlet_spawn(self._sync.set_prompt_handler, alert=alert, confirm=confirm, prompt=prompt, default=default, prompt_text=prompt_text)
         return _wrap_async_result(_r, self)
 

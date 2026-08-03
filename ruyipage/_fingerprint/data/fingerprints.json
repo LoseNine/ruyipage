@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
-  "firefox_base_version": 151,
-  "firefox_minor_jitter": [-2, -1, 0, 1, 2],
+  "firefox_base_version": 155,
   "hardware_profiles": [
     {
       "id": "win-rtx4090",

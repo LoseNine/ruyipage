@@ -52,6 +52,7 @@ from .builder import (
     default_region_locales_path,
     # data contracts
     GeoInfo,
+    GeolocationProfile,
     WebGLProfile,
     HardwareProfile,
     CountryProfile,
@@ -77,6 +78,7 @@ __all__ = [
     "default_fingerprints_path",
     "default_region_locales_path",
     "GeoInfo",
+    "GeolocationProfile",
     "WebGLProfile",
     "HardwareProfile",
     "CountryProfile",

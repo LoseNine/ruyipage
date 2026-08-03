@@ -119,6 +119,7 @@ def _get_signature_str(method, skip_self=True):
 
     params = []
     call_args = []
+    keyword_only_boundary = False
 
     for name, param in sig.parameters.items():
         if name == "self" and skip_self:
@@ -128,10 +129,14 @@ def _get_signature_str(method, skip_self=True):
         if param.kind == inspect.Parameter.VAR_POSITIONAL:
             params.append("*{}".format(name))
             call_args.append("*{}".format(name))
+            keyword_only_boundary = True
         elif param.kind == inspect.Parameter.VAR_KEYWORD:
             params.append("**{}".format(name))
             call_args.append("**{}".format(name))
         elif param.kind == inspect.Parameter.KEYWORD_ONLY:
+            if not keyword_only_boundary:
+                params.append("*")
+                keyword_only_boundary = True
             if param.default is inspect.Parameter.empty:
                 params.append(name)
             else:

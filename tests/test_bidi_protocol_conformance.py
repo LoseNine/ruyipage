@@ -60,6 +60,35 @@ def test_emulation_fields_match_latest_schema():
     assert driver.calls[-1][1] == {"theme": None}
 
 
+def test_geolocation_override_forwards_complete_coordinates():
+    driver = DummyDriver()
+
+    emulation.set_geolocation_override(
+        driver,
+        latitude=40.7128,
+        longitude=-74.006,
+        accuracy=25,
+        altitude=12.5,
+        altitude_accuracy=3.5,
+        heading=45,
+        speed=2.25,
+        contexts=["ctx-1"],
+    )
+
+    assert driver.calls[-1][1] == {
+        "coordinates": {
+            "latitude": 40.7128,
+            "longitude": -74.006,
+            "accuracy": 25,
+            "altitude": 12.5,
+            "altitudeAccuracy": 3.5,
+            "heading": 45,
+            "speed": 2.25,
+        },
+        "contexts": ["ctx-1"],
+    }
+
+
 def test_viewport_meta_override_exists_and_supports_scope():
     driver = DummyDriver()
     emulation.set_viewport_meta_override(driver, viewport_meta=True, user_contexts=["uc-1"])

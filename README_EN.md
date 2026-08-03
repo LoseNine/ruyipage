@@ -1723,12 +1723,19 @@ ctx.apply_emulation(page)  # ctx -> page -> ctx.apply_emulation(page)
 
 `set_window_size_on_opts` is retained as a deprecated no-op. Smart fingerprinting never maps `screen.width` / `screen.height` to the Firefox outer window. If an explicit outer window is required, call `opts.set_window_size(width, height)` yourself before creating `FirefoxPage`. `fpfile.txt` no longer stores `width` / `height`.
 
+By default, smart fingerprinting adds an `about:blank` startup page so the BiDi overlays can run immediately without `remote-allow-system-access`. Pass `set_startup_page_on_opts=False` when you already provide a script-accessible custom startup URL.
+
 ### Pipeline notes
 
+- Geo lookup uses ten fallback sources. Optional IPv6 lookup enriches diagnostics only; it is never copied into WebRTC policy fields automatically.
+- The generated UA uses the major version reported by `opts.browser_path`; it falls back to the bundled baseline only when the executable cannot be queried, without version jitter.
 - After Firefox starts, `ctx.apply_emulation(page)` sets `screen.width` / `screen.height` / `screen.avail*` through `page.emulation.set_screen_size(hw.width, hw.height)`.
+- For an async page, use `await ctx.apply_emulation_async(async_page)`. This entry point is always awaitable, including when every overlay is disabled.
 - Firefox keeps `outerWidth` / `innerWidth` / viewport geometry natively, and they change with the real window.
 - We do not add production coordinate compensation such as 15/92 or 16/93; 16/93 is only for real-machine verification of the target fingerprint browser.
 - The `apply_emulation()` result includes `screen`, `geolocation`, `locale`, `timezone`, and `headers`.
+- WebRTC remains in Firefox native ICE mode unless real addresses are supplied through `webrtc_local_ipv4/ipv6` or `webrtc_public_ipv4/ipv6`. Native ICE may expose a direct srflx address different from HTTP proxy egress; `local_webrtc_*` controls literal exposure of matching host addresses and does not filter every host candidate.
+- Geolocation latitude, longitude, accuracy, altitude, altitude accuracy, heading, and speed are shared across fpfile and BiDi. A numeric `geolocation_timestamp` is Unix epoch milliseconds; timestamps and `prompt`/`denied` permission states stay kernel-managed because BiDi does not represent them.
 
 ---
 

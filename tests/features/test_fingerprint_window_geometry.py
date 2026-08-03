@@ -50,6 +50,7 @@ def _fixed_1366_fingerprint():
         hardware=hardware,
         country=country,
         canvas_seed=175,
+        audio_seed=176,
         language_primary=country.language_primary,
         accept_language=country.accept_language,
     )

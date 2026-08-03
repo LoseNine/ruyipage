@@ -119,7 +119,7 @@
       }
     },
     "JP": {
-      "language": "ja-JP,ja",
+      "language": "ja-JP,ja,en",
       "language_primary": "ja-JP",
       "accept_language": "ja-JP,ja;q=0.9,en;q=0.8",
       "speech": {
@@ -132,7 +132,7 @@
       }
     },
     "KR": {
-      "language": "ko-KR,ko",
+      "language": "ko-KR,ko,en",
       "language_primary": "ko-KR",
       "accept_language": "ko-KR,ko;q=0.9,en;q=0.8",
       "speech": {
@@ -145,7 +145,7 @@
       }
     },
     "TW": {
-      "language": "zh-TW,zh",
+      "language": "zh-TW,zh,en",
       "language_primary": "zh-TW",
       "accept_language": "zh-TW,zh;q=0.9,en;q=0.8",
       "speech": {
@@ -171,7 +171,7 @@
       }
     },
     "CN": {
-      "language": "zh-CN,zh",
+      "language": "zh-CN,zh,en",
       "language_primary": "zh-CN",
       "accept_language": "zh-CN,zh;q=0.9,en;q=0.8",
       "speech": {
@@ -236,7 +236,7 @@
       }
     },
     "DE": {
-      "language": "de-DE,de",
+      "language": "de-DE,de,en",
       "language_primary": "de-DE",
       "accept_language": "de-DE,de;q=0.9,en;q=0.8",
       "speech": {
@@ -249,7 +249,7 @@
       }
     },
     "FR": {
-      "language": "fr-FR,fr",
+      "language": "fr-FR,fr,en",
       "language_primary": "fr-FR",
       "accept_language": "fr-FR,fr;q=0.9,en;q=0.8",
       "speech": {
@@ -262,7 +262,7 @@
       }
     },
     "ES": {
-      "language": "es-ES,es",
+      "language": "es-ES,es,en",
       "language_primary": "es-ES",
       "accept_language": "es-ES,es;q=0.9,en;q=0.8",
       "speech": {
@@ -275,7 +275,7 @@
       }
     },
     "IT": {
-      "language": "it-IT,it",
+      "language": "it-IT,it,en",
       "language_primary": "it-IT",
       "accept_language": "it-IT,it;q=0.9,en;q=0.8",
       "speech": {
