@@ -33,23 +33,30 @@ jobs:
       - name: Run fast tests
         run: python -m pytest -m fast -q
 
-      - name: Install Firefox 151
+      - name: Install managed Firefox 155
         shell: powershell
         run: |
-          # CI 第一阶段固定使用官方 Firefox 151。
-          # 指纹浏览器 151 更适合作为手工发版验证环境，不强耦合到公共 runner。
-          $url = "https://download-installer.cdn.mozilla.net/pub/firefox/releases/151.0/win64/zh-CN/Firefox%20Setup%20151.0.exe"
-          $installer = "$env:RUNNER_TEMP\firefox-151.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList '/S' -Wait
-          if (-not (Test-Path 'C:\Program Files\Mozilla Firefox\firefox.exe')) {
-            throw 'Firefox 151 install failed'
+          $installRoot = Join-Path $env:RUNNER_TEMP "ruyipage-browsers"
+          $installJson = python -m ruyipage install --install-dir "$installRoot" --json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Managed Firefox install failed with exit code $LASTEXITCODE"
           }
 
-      - name: Set Firefox path for tests
-        shell: powershell
-        run: |
-          "RUYIPAGE_TEST_FIREFOX_PATH=C:\Program Files\Mozilla Firefox\firefox.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $runtime = $installJson | ConvertFrom-Json
+          if ($runtime.version -ne "155.0a1") {
+            throw "Expected Firefox 155.0a1, got $($runtime.version)"
+          }
+          if ($runtime.release -ne "v1.2.58") {
+            throw "Expected runtime release v1.2.58, got $($runtime.release)"
+          }
+          if ($runtime.asset -ne "firefox-155.0a1.en-US.win64-20260803.zip") {
+            throw "Unexpected Firefox asset: $($runtime.asset)"
+          }
+          if (-not (Test-Path -LiteralPath $runtime.executable_path -PathType Leaf)) {
+            throw "Managed Firefox executable not found: $($runtime.executable_path)"
+          }
+
+          "RUYIPAGE_TEST_FIREFOX_PATH=$($runtime.executable_path)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run smoke tests
         run: python -m pytest tests/smoke -m browser -q
