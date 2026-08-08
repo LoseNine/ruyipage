@@ -11,6 +11,12 @@ from ruyipage._runtime import installer
 from ruyipage._runtime.archive import extract_archive
 from ruyipage._runtime.cli import main as runtime_main
 from ruyipage._runtime.errors import RuntimeVerificationError, UnsafeArchiveError
+from ruyipage._runtime.manifest import (
+    FIREFOX_VERSION,
+    RELEASE_TAG,
+    RUNTIMES,
+    runtime_url,
+)
 from ruyipage._runtime.resolver import resolve_firefox_path
 from ruyipage._runtime.verify import sha256_file, verify_sha256
 
@@ -34,6 +40,40 @@ def _make_tar_xz(path, entries, symlink=None):
             info.type = tarfile.SYMTYPE
             info.linkname = symlink[1]
             tf.addfile(info)
+
+
+@pytest.mark.parametrize(
+    ("platform_key", "asset", "install_subdir"),
+    [
+        (
+            "win64",
+            "firefox-155.0a1.en-US.win64-20260803.zip",
+            "firefox-155.0a1-v1.2.58-win64",
+        ),
+        (
+            "linux-x86_64",
+            "firefox-155.0a1.en-US.linux-x86_64.tar.xz",
+            "firefox-155.0a1-v1.2.58-linux-x86_64",
+        ),
+    ],
+)
+def test_runtime_manifest_targets_latest_ruyipage_release(
+    platform_key,
+    asset,
+    install_subdir,
+):
+    info = RUNTIMES[platform_key]
+
+    assert RELEASE_TAG == "v1.2.58"
+    assert FIREFOX_VERSION == "155.0a1"
+    assert info["release"] == RELEASE_TAG
+    assert info["version"] == FIREFOX_VERSION
+    assert info["asset"] == asset
+    assert info["install_subdir"] == install_subdir
+    assert runtime_url(info) == (
+        "https://github.com/LoseNine/ruyipage/releases/download/"
+        "v1.2.58/{}".format(asset)
+    )
 
 
 def test_verify_sha256_rejects_mismatch(tmp_path):
