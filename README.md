@@ -78,6 +78,44 @@
 
 ---
 
+## 内核两项底层能力：指纹与追踪
+
+配套内核在 Firefox 源码层面加了两套东西。它们不依赖 BiDi，页面里的 JS 看不见。
+
+### 指纹（fpfile）
+
+一个 `--fpfile=` 文本文件决定浏览器对外呈现的整套指纹：UA、语言、时区、屏幕、CPU 核数、
+触摸、Canvas / 音频扰动、WebGL 显卡参数、字体白名单、WebRTC、语音列表、地理位置，以及
+HTTP / SOCKS5 代理凭据。所有值都在 C++ 原生 getter 里改写，不包装任何 JS 函数，
+所以 `toString()` 仍是 `[native code]`，原型链形状不变。`navigator.webdriver` 恒为 `false`。
+
+多数场景不用手写：`opts.smart_fingerprint()` 会探测出口 IP、匹配语言/时区、从 22 套真机
+硬件特征里抽一套自动生成。要固定某台机型或调整单个字段时，看
+[`fingerprint/fpfile指纹说明.md`](fingerprint/fpfile%E6%8C%87%E7%BA%B9%E8%AF%B4%E6%98%8E.md)
+（[English](fingerprint/fpfile-fingerprint.md)）——每个 key 的取值、别名、影响的 API 和验收方法。
+
+### 追踪（MOZ_DOM_* 环境变量）
+
+启动前设几个环境变量，内核就会把页面运行时发生的事写成日志：每一次 JS 函数调用
+（含参数、返回值、闭包变量、调用树）、DOM 属性读写、Cookie / Storage 操作、异常、
+WASM 模块与跨边界调用、HTTP 报文、WebSocket 帧；还能一次性导出本构建暴露的全部宿主接口，
+用来对照页面探测了什么、什么在这个环境里不存在。另有一组 `MOZ_DOM_API_*` 可以直接
+定制 `Date.now` / `performance.now` / `Math.random` / `crypto.getRandomValues` 的返回值。
+
+```powershell
+$env:MOZ_DOM_TRACE = "1"
+$env:MOZ_DOM_TRACE_FILE = "D:\trace\run.jsonl"
+$env:MOZ_DOM_JSCALL_TRACE = "1"
+& firefox.exe --new-instance -no-remote -profile "D:\profile"
+```
+
+这是分析反爬脚本、补 JS 运行环境时的主要工具。开关速查见
+[`trace/trace-cheatsheet.md`](trace/trace-cheatsheet.md)（63 个开关，含取值、默认值、
+生效条件），输出格式、因果链查法和排障见 [`trace/README.md`](trace/README.md)，
+JSCall 二进制输出的解码器在 [`trace/tools/jscall_decode.py`](trace/tools/jscall_decode.py)。
+
+---
+
 ## 安装与使用
 
 ### 安装
