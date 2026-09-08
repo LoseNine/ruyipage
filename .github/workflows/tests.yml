@@ -46,10 +46,10 @@ jobs:
           if ($runtime.version -ne "155.0") {
             throw "Expected Firefox 155.0, got $($runtime.version)"
           }
-          if ($runtime.release -ne "v1.2.66") {
-            throw "Expected runtime release v1.2.66, got $($runtime.release)"
+          if ($runtime.release -ne "v1.2.69") {
+            throw "Expected runtime release v1.2.69, got $($runtime.release)"
           }
-          if ($runtime.asset -ne "firefox-155.0.en-US.win64-20260829.zip") {
+          if ($runtime.asset -ne "firefox-155.0.en-US.win64-20260907.zip") {
             throw "Unexpected Firefox asset: $($runtime.asset)"
           }
           if (-not (Test-Path -LiteralPath $runtime.executable_path -PathType Leaf)) {
