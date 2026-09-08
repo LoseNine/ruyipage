@@ -1781,12 +1781,38 @@ class Firefox(object):
             self._address, shared=bool(self._options.is_existing_only)
         )
 
-    def _wait_for_initial_context(self, timeout=3.0, interval=0.1):
+    # 显式 attach 的浏览器等首个窗口的上限。没有窗口是真问题，快速失败。
+    _ATTACHED_INITIAL_CONTEXT_TIMEOUT = 3.0
+
+    def _wait_for_initial_context(self, timeout=None, interval=0.1):
+        """等 Firefox 返回首个 browsingContext。
+
+        自己启动的实例：Remote Agent 比第一个窗口早就绪，高并发冷启动时两者
+        可能差十几秒。这里**不设短时钟上限**——只要进程还活着就一直等到窗口
+        出现。早期版本用 3 秒上限，导致连接刚建好就被判死拆掉、每 3 秒重建
+        一次（session.end -> session.new -> addPreloadScript），一次卡顿里空
+        转十余轮，甚至把本该成功的慢启动逼成失败。用进程存活而非时钟判定，
+        既不空转也不误杀。外层的 retry/宽限预算负责真正起不来的情形。
+
+        显式 attach 的浏览器没有自己的进程可判，保留固定的短超时。
+        """
+        launched = not self._options.is_existing_only
+        if timeout is None:
+            # 自启动实例靠进程存活判定；再加一个绝对上限兜底，万一存活探测异常
+            # 也不会永久挂死。上限取宽限期，足够覆盖最慢的冷启动。
+            timeout = (
+                max(self._launch_grace_timeout(), self._LAUNCH_GRACE_MIN)
+                if launched
+                else self._ATTACHED_INITIAL_CONTEXT_TIMEOUT
+            )
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             self._refresh_tabs()
             if self._context_ids:
                 return True
+            if launched and not self._launched_browser_alive():
+                break
             time.sleep(min(interval, max(0.01, deadline - time.time())))
         self._refresh_tabs()
         return bool(self._context_ids)

@@ -1209,6 +1209,62 @@ def test_failed_connect_after_session_new_ends_the_session(monkeypatch, tmp_path
     assert browser._session_ownership_verified is True
 
 
+def test_initial_context_wait_outlasts_the_old_three_second_cap(monkeypatch):
+    """自启动实例只要进程还活着就一直等窗口，不再 3 秒就拆连接重建。"""
+    browser = _bare_browser("127.0.0.1:9395")
+    browser._process = _FakeProcess()
+    browser._context_ids = []
+    browser._context_ids_lock = threading.Lock()
+    monkeypatch.setattr(Firefox, "_launched_browser_alive", lambda self: True)
+
+    started = browser_module.time.time()
+    ready_at = started + 4.0  # 超过早期的 3 秒上限
+
+    def refresh(self):
+        if browser_module.time.time() >= ready_at:
+            self._context_ids = ["ctx-1"]
+
+    monkeypatch.setattr(Firefox, "_refresh_tabs", refresh)
+
+    assert browser._wait_for_initial_context() is True
+
+
+def test_initial_context_wait_stays_short_for_attached_browsers(monkeypatch):
+    """显式 attach 的浏览器没有窗口是真问题，3 秒内就要报出来。"""
+    browser = _bare_browser(
+        "127.0.0.1:9393", options=FirefoxOptions().existing_only(True)
+    )
+    browser._context_ids = []
+    browser._context_ids_lock = threading.Lock()
+    monkeypatch.setattr(Firefox, "_refresh_tabs", lambda self: None)
+
+    started = browser_module.time.time()
+    assert browser._wait_for_initial_context() is False
+    assert browser_module.time.time() - started < 4.0
+
+
+def test_initial_context_wait_stops_when_own_process_dies(monkeypatch):
+    """自己的进程死了就别等满 15 秒。"""
+
+    class _Dead:
+        pid = 1
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+    browser = _bare_browser("127.0.0.1:9394")
+    browser._process = _Dead()
+    browser._context_ids = []
+    browser._context_ids_lock = threading.Lock()
+    monkeypatch.setattr(Firefox, "_refresh_tabs", lambda self: None)
+    monkeypatch.setattr(Firefox, "_launched_browser_alive", lambda self: False)
+
+    started = browser_module.time.time()
+    assert browser._wait_for_initial_context() is False
+    assert browser_module.time.time() - started < 2.0
+
+
 def test_discard_connection_without_a_session_does_not_send_end(monkeypatch, tmp_path):
     """会话根本没建成时不该发 session.end，那会结束别人的会话。"""
     browser = _bare_browser("127.0.0.1:9391")
