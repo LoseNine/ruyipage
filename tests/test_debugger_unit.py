@@ -8,10 +8,12 @@ import pytest
 
 from ruyipage._configs.firefox_options import FirefoxOptions
 from ruyipage._units.debugger import (
+    _MAX_LOG_ENTRIES,
     Debugger,
     Frame,
     PausedState,
     RemoteObject,
+    RemoteString,
     Source,
 )
 from ruyipage.errors import DebuggerError
@@ -1426,6 +1428,596 @@ def test_xhr_pause_is_identified():
 
     assert state.is_xhr is True
     assert state.is_event_breakpoint is False
+
+
+def test_log_point_sends_log_value_and_does_not_pause():
+    """日志断点命中时只输出 console 消息，不暂停。"""
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [{"actor": "src1", "url": "https://x.test/app.js"}]
+            },
+            ("src1", "getBreakpointPositionsCompressed"): {"positions": {"6": [16]}},
+        }
+    )
+
+    bp = debugger.set_breakpoint(
+        "https://x.test/app.js", 6, log_value="subtotal", log_stacktrace=True
+    )
+
+    assert bp.is_log_point is True
+    assert bp.log_value == "subtotal"
+    assert "LogPoint" in repr(bp)
+    options = next(
+        params["options"]
+        for _actor, type_, params in debugger._rdp.calls
+        if type_ == "setBreakpoint"
+    )
+    assert options == {"logValue": "subtotal", "showStacktrace": True}
+
+
+def test_plain_breakpoint_is_not_a_log_point():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [{"actor": "src1", "url": "https://x.test/app.js"}]
+            },
+            ("src1", "getBreakpointPositionsCompressed"): {"positions": {"6": [16]}},
+        }
+    )
+
+    bp = debugger.set_breakpoint("https://x.test/app.js", 6)
+
+    assert bp.is_log_point is False
+    assert bp.log_value is None
+
+
+# ── 长字符串 ──
+
+
+def test_long_string_keeps_its_handle_for_a_full_read():
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "bindings": {
+                    "variables": {
+                        "text": {
+                            "value": {
+                                "type": "longString",
+                                "actor": "lstr1",
+                                "length": 12,
+                                "initial": "hello",
+                            }
+                        }
+                    }
+                }
+            },
+            ("lstr1", "substring"): {"substring": " world!"},
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    text = debugger.scope()["text"]
+
+    # 当普通字符串用时是截断版
+    assert isinstance(text, str)
+    assert text == "hello…"
+    assert text.truncated is True
+    # 需要完整内容时可以取回
+    assert debugger.read_string(text) == "hello world!"
+
+
+def test_short_string_is_returned_whole():
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "bindings": {
+                    "variables": {
+                        "text": {
+                            "value": {
+                                "type": "longString",
+                                "actor": "lstr1",
+                                "length": 5,
+                                "initial": "short",
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.scope()["text"] == "short"
+
+
+def test_read_string_passes_plain_strings_through():
+    debugger = _debugger()
+
+    assert debugger.read_string("plain") == "plain"
+
+
+# ── Map / Set 条目 ──
+
+
+def test_entries_decodes_a_map():
+    """Map 条目形如 {type: "mapEntry", preview: {key, value}}。"""
+    debugger = _debugger(
+        {
+            ("m1", "enumEntries"): {
+                "iterator": {"type": "propertyIterator", "actor": "it1", "count": 2}
+            },
+            ("it1", "slice"): {
+                "ownProperties": {
+                    "0": {
+                        "value": {
+                            "type": "mapEntry",
+                            "preview": {"key": "alpha", "value": 1},
+                        }
+                    },
+                    "1": {
+                        "value": {
+                            "type": "mapEntry",
+                            "preview": {"key": "beta", "value": 2},
+                        }
+                    },
+                }
+            },
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.entries("m1") == {"alpha": 1, "beta": 2}
+
+
+def test_entries_decodes_a_set_as_a_list():
+    """Set 条目是裸 grip。"""
+    debugger = _debugger(
+        {
+            ("s1", "enumEntries"): {
+                "iterator": {"type": "propertyIterator", "actor": "it2", "count": 3}
+            },
+            ("it2", "slice"): {
+                "ownProperties": {
+                    "0": {"value": "x"},
+                    "1": {"value": "y"},
+                    "2": {"value": "z"},
+                }
+            },
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.entries("s1") == ["x", "y", "z"]
+
+
+def test_entries_on_an_object_without_entries_raises():
+    debugger = _debugger({("o1", "enumEntries"): {"iterator": {"count": 0}}})
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with pytest.raises(DebuggerError, match="没有可枚举的条目"):
+        debugger.entries("o1")
+
+
+# ── 远程调用与 getter ──
+
+
+def test_call_invokes_a_remote_function():
+    debugger = _debugger(
+        {("fn1", "apply"): {"value": {"return": {"type": "number", "value": 42}}}}
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.call("fn1", args=[1, "two"]) == 42
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params["arguments"] == [1, "two"]
+    # 服务端把「是对象但没有 actor」的实参当成非法 grip，null 要原样传
+    assert params["context"] is None
+
+
+def test_call_passes_remote_objects_by_reference():
+    target = RemoteObject({"class": "Object", "actor": "obj9"})
+    debugger = _debugger({("fn1", "apply"): {"value": {"return": {"value": 1}}}})
+    debugger._handle_paused(PAUSED_PACKET)
+
+    debugger.call("fn1", args=[target], this=target)
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params["arguments"] == [{"type": "object", "actor": "obj9"}]
+    assert params["context"] == {"type": "object", "actor": "obj9"}
+
+
+def test_call_surfaces_a_thrown_error():
+    debugger = _debugger(
+        {
+            ("fn1", "apply"): {
+                "value": {
+                    "throw": {
+                        "type": "object",
+                        "class": "TypeError",
+                        "actor": "e1",
+                        "preview": {"kind": "Error", "message": "boom"},
+                    }
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with pytest.raises(DebuggerError, match="函数调用抛出异常"):
+        debugger.call("fn1")
+
+
+def test_invoke_getter_returns_the_computed_value():
+    debugger = _debugger(
+        {("o1", "propertyValue"): {"value": {"return": {"value": "computed"}}}}
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.invoke_getter("o1", "total") == "computed"
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params == {"name": "total", "receiverId": None}
+
+
+def test_invoke_getter_surfaces_a_thrown_error():
+    debugger = _debugger(
+        {("o1", "propertyValue"): {"value": {"throw": {"type": "string", "value": "no"}}}}
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with pytest.raises(DebuggerError, match="getter total抛出异常"):
+        debugger.invoke_getter("o1", "total")
+
+
+# ── Promise ──
+
+
+def test_promise_state_is_decoded():
+    """结果嵌在同名的 promiseState 键下。"""
+    debugger = _debugger(
+        {
+            ("p1", "promiseState"): {
+                "promiseState": {
+                    "state": "fulfilled",
+                    "value": 7,
+                    "creationTimestamp": 123.0,
+                    "timeToSettle": 4.5,
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    state = debugger.promise_state("p1")
+
+    assert state["state"] == "fulfilled"
+    assert state["value"] == 7
+    assert state["reason"] is None
+    assert state["time_to_settle"] == 4.5
+
+
+def test_promise_state_on_a_non_promise_raises():
+    debugger = _debugger({("o1", "promiseState"): {"promiseState": {}}})
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with pytest.raises(DebuggerError, match="不是 Promise"):
+        debugger.promise_state("o1")
+
+
+# ── 监视点 ──
+
+
+class _SendingRdp(FakeRdp):
+    def __init__(self, replies=None):
+        super().__init__(replies)
+        self.sent = []
+
+    def send(self, packet):
+        self.sent.append(packet)
+
+
+def _watch_debugger():
+    debugger = Debugger(owner=None)
+    debugger._rdp = _SendingRdp()
+    debugger._thread_actor = "thread1"
+    debugger._source_urls = {"src1": "https://x.test/app.js"}
+    debugger._handle_paused(PAUSED_PACKET)
+    return debugger
+
+
+def test_watch_property_uses_a_oneway_send():
+    """addWatchpoint 是 oneway，用 request() 会一直等到超时。"""
+    debugger = _watch_debugger()
+
+    debugger.watch_property("o1", "total", on="set")
+
+    assert debugger._rdp.sent == [
+        {
+            "to": "o1",
+            "type": "addWatchpoint",
+            "property": "total",
+            "label": "total",
+            "watchpointType": "set",
+        }
+    ]
+    assert debugger._rdp.calls == []
+
+
+def test_watch_property_rejects_an_unknown_kind():
+    debugger = _watch_debugger()
+
+    with pytest.raises(DebuggerError, match="getorset"):
+        debugger.watch_property("o1", "total", on="both")
+
+
+def test_unwatch_property_removes_one_or_all():
+    debugger = _watch_debugger()
+
+    debugger.unwatch_property("o1", "total")
+    debugger.unwatch_property("o1")
+
+    assert [p["type"] for p in debugger._rdp.sent] == [
+        "removeWatchpoint",
+        "removeWatchpoints",
+    ]
+
+
+def test_object_operations_require_a_pause():
+    debugger = _debugger()
+
+    for call in (
+        lambda: debugger.entries("o1"),
+        lambda: debugger.call("fn1"),
+        lambda: debugger.invoke_getter("o1", "x"),
+        lambda: debugger.promise_state("p1"),
+        lambda: debugger.watch_property("o1", "x"),
+    ):
+        with pytest.raises(DebuggerError, match="暂停状态"):
+            call()
+
+
+# ── 日志断点输出 ──
+
+
+def test_log_entries_are_collected_from_console_messages():
+    debugger = _debugger()
+
+    debugger._handle_console_message(
+        {
+            "message": {
+                "level": "logPoint",
+                "arguments": [1, "two"],
+                "filename": "https://x.test/app.js",
+                "lineNumber": 6,
+            }
+        }
+    )
+
+    entries = debugger.logs()
+    assert entries == [
+        {
+            "values": [1, "two"],
+            "url": "https://x.test/app.js",
+            "line": 6,
+            "is_error": False,
+            "stacktrace": [],
+        }
+    ]
+    # 默认取回后清空
+    assert debugger.logs() == []
+
+
+def test_log_entries_can_be_kept_after_reading():
+    debugger = _debugger()
+    debugger._handle_console_message({"message": {"level": "logPoint", "arguments": []}})
+
+    assert len(debugger.logs(clear=False)) == 1
+    assert len(debugger.logs()) == 1
+
+
+def test_page_console_calls_are_ignored():
+    """页面自己的 console.log 不应混进日志断点输出。"""
+    debugger = _debugger()
+
+    debugger._handle_console_message(
+        {"message": {"level": "log", "arguments": ["from the page"]}}
+    )
+
+    assert debugger.logs() == []
+
+
+def test_failing_log_expression_is_marked_as_an_error():
+    debugger = _debugger()
+
+    debugger._handle_console_message(
+        {"message": {"level": "logPointError", "arguments": ["nope is not defined"]}}
+    )
+
+    assert debugger.logs()[0]["is_error"] is True
+
+
+def test_log_buffer_is_bounded():
+    debugger = _debugger()
+
+    for i in range(_MAX_LOG_ENTRIES + 50):
+        debugger._handle_console_message(
+            {"message": {"level": "logPoint", "arguments": [i]}}
+        )
+
+    entries = debugger.logs()
+    assert len(entries) == _MAX_LOG_ENTRIES
+    # 丢的是最早的
+    assert entries[0]["values"] == [50]
+
+
+def test_wait_logs_returns_early_once_enough_arrived():
+    debugger = _debugger()
+    debugger._handle_console_message({"message": {"level": "logPoint", "arguments": [1]}})
+
+    started = time.time()
+    entries = debugger.wait_logs(count=1, timeout=5)
+
+    assert len(entries) == 1
+    assert time.time() - started < 1
+
+
+def test_wait_logs_gives_back_what_it_has_on_timeout():
+    debugger = _debugger()
+    debugger._handle_console_message({"message": {"level": "logPoint", "arguments": [1]}})
+
+    entries = debugger.wait_logs(count=5, timeout=0.2)
+
+    assert len(entries) == 1
+
+
+def test_scope_includes_this_from_the_frame():
+    """this 不在环境绑定里，它挂在帧上。"""
+    debugger = _debugger(
+        {("frame7", "getEnvironment"): {"bindings": {"variables": {"sum": {"value": 3}}}}}
+    )
+    packet = dict(PAUSED_PACKET)
+    packet["frame"] = dict(
+        PAUSED_PACKET["frame"],
+        **{"this": {"type": "object", "class": "Cart", "actor": "cart1"}}
+    )
+    debugger._handle_paused(packet)
+
+    scope = debugger.scope()
+
+    assert scope["sum"] == 3
+    assert isinstance(scope["this"], RemoteObject)
+    assert scope["this"].actor == "cart1"
+
+
+def test_scope_omits_this_when_the_frame_has_none():
+    debugger = _debugger(
+        {("frame7", "getEnvironment"): {"bindings": {"variables": {"sum": {"value": 3}}}}}
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert "this" not in debugger.scope()
+
+
+def test_frame_exposes_this():
+    frame = Frame({"actor": "f1", "this": {"type": "object", "actor": "o1"}})
+
+    assert isinstance(frame.this_object, RemoteObject)
+
+
+def test_get_property_walks_the_prototype_chain_for_methods():
+    """类的方法挂在原型上，不是实例的自有属性。"""
+    debugger = _debugger(
+        {
+            ("cart1", "property"): {"descriptor": None},
+            ("cart1", "prototype"): {
+                "prototype": {"type": "object", "actor": "proto1"}
+            },
+            ("proto1", "property"): {
+                "descriptor": {"value": {"type": "object", "class": "Function",
+                                          "actor": "fn1"}}
+            },
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    method = debugger.get_property("cart1", "lineTotal")
+
+    assert isinstance(method, RemoteObject)
+    assert method.actor == "fn1"
+
+
+def test_get_property_can_be_limited_to_own_properties():
+    debugger = _debugger(
+        {
+            ("cart1", "property"): {"descriptor": None},
+            ("cart1", "prototype"): {
+                "prototype": {"type": "object", "actor": "proto1"}
+            },
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.get_property("cart1", "lineTotal", own_only=True) is None
+    # 没有去问原型
+    assert not any(actor == "cart1" and type_ == "prototype"
+                   for actor, type_, _ in debugger._rdp.calls)
+
+
+def test_get_property_stops_at_the_end_of_the_prototype_chain():
+    debugger = _debugger(
+        {
+            ("o1", "property"): {"descriptor": None},
+            ("o1", "prototype"): {"prototype": {"type": "null"}},
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.get_property("o1", "nope") is None
+
+
+def test_get_property_does_not_loop_on_a_cyclic_prototype():
+    debugger = _debugger(
+        {
+            ("o1", "property"): {"descriptor": None},
+            ("o1", "prototype"): {"prototype": {"type": "object", "actor": "o1"}},
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.get_property("o1", "nope") is None
+
+
+def test_global_object_is_resolved_from_the_frame_this():
+    debugger = _debugger(
+        {("cart1", "global"): {"global": {"type": "object", "class": "Window",
+                                           "actor": "win1"}}}
+    )
+    packet = dict(PAUSED_PACKET)
+    packet["frame"] = dict(
+        PAUSED_PACKET["frame"],
+        **{"this": {"type": "object", "class": "Cart", "actor": "cart1"}}
+    )
+    debugger._handle_paused(packet)
+
+    window = debugger.global_object()
+
+    assert isinstance(window, RemoteObject)
+    assert window.actor == "win1"
+
+
+def test_global_object_falls_back_to_any_object_in_scope():
+    """帧没有 this 时，用作用域里任意远端对象定位全局。"""
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "bindings": {
+                    "variables": {
+                        "count": {"value": 1},
+                        "cart": {
+                            "value": {"type": "object", "class": "Object",
+                                       "actor": "cart1"}
+                        },
+                    }
+                }
+            },
+            ("cart1", "global"): {"global": {"type": "object", "class": "Window",
+                                              "actor": "win1"}},
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.global_object().actor == "win1"
+
+
+def test_global_object_without_any_object_to_start_from_raises():
+    debugger = _debugger(
+        {("frame7", "getEnvironment"): {"bindings": {"variables": {"n": {"value": 1}}}}}
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with pytest.raises(DebuggerError, match="显式传入 obj"):
+        debugger.global_object()
 
 
 def test_api_calls_before_start_raise_clear_error():

@@ -30,12 +30,20 @@ JS 线程暂停期间，任何依赖 JS 执行的操作（``run_js``、点击、
 
 import logging
 import threading
+import time
+from collections import deque
 from queue import Empty, Queue
 
 from .._adapter.rdp import DEFAULT_RDP_PORT, RdpConnection
 from ..errors import DebuggerError
 
 logger = logging.getLogger("ruyipage")
+
+# 日志断点的输出缓冲上限，避免高频命中时无限增长
+_MAX_LOG_ENTRIES = 1000
+
+# 沿原型链查属性的跳数上限，防止环形原型导致死循环
+_MAX_PROTOTYPE_HOPS = 20
 
 _STEP_LIMITS = {
     "over": "next",
@@ -58,6 +66,27 @@ class Source(object):
 
     def __repr__(self):
         return "<Source {}>".format(self.url or self.actor)
+
+
+class RemoteString(str):
+    """一个被截断的超长字符串。
+
+    RDP 对超过一万字符的字符串只随包返回开头一段。本类继承 ``str``，直接当
+    字符串用得到的是截断版（末尾带省略号），需要完整内容时用
+    :meth:`Debugger.read_string`。
+    """
+
+    __slots__ = ("actor", "length")
+
+    def __new__(cls, initial, actor, length):
+        obj = super().__new__(cls, initial + "…")
+        obj.actor = actor
+        obj.length = length
+        return obj
+
+    @property
+    def truncated(self):
+        return True
 
 
 class RemoteObject(object):
@@ -171,7 +200,11 @@ def _grip_to_python(grip):
         return float(grip_type.replace("Infinity", "inf"))
     if grip_type == "longString":
         initial = grip.get("initial") or ""
-        return initial if len(initial) >= (grip.get("length") or 0) else initial + "…"
+        length = grip.get("length") or 0
+        if len(initial) >= length or not grip.get("actor"):
+            return initial
+        # 保留 actor，调用方可以用 read_string() 取回完整内容
+        return RemoteString(initial, grip["actor"], length)
     if grip_type == "symbol":
         return grip.get("name") or "Symbol()"
     if grip_type == "BigInt":
@@ -185,22 +218,43 @@ def _grip_to_python(grip):
     return grip
 
 
+def _to_grip_argument(value):
+    """把 Python 值转成 RDP 能接受的实参形式。
+
+    远端对象要写成 ``{"type": "object", "actor": ...}``；基本类型直接传字面量。
+    服务端把任何「是对象但没有 actor 字段」的实参视为非法 grip，所以 ``None``
+    必须原样传 JSON null，不能包成 ``{"type": "null"}``。
+    """
+    if isinstance(value, RemoteObject):
+        return {"type": "object", "actor": value.actor}
+    return value
+
+
 class Breakpoint(object):
     """一个已设置的断点。"""
 
-    __slots__ = ("url", "line", "column", "source_actor", "condition")
+    __slots__ = ("url", "line", "column", "source_actor", "condition", "log_value")
 
-    def __init__(self, url, line, column, source_actor, condition=None):
+    def __init__(self, url, line, column, source_actor, condition=None, log_value=None):
         self.url = url
         self.line = line
         self.column = column
         self.source_actor = source_actor
         self.condition = condition
+        self.log_value = log_value
+
+    @property
+    def is_log_point(self):
+        """日志断点命中时只输出 console 消息，不暂停执行。"""
+        return bool(self.log_value)
 
     def __repr__(self):
+        kind = "LogPoint" if self.log_value else "Breakpoint"
         suffix = " if {}".format(self.condition) if self.condition else ""
-        return "<Breakpoint {}:{}:{}{}>".format(
-            self.url, self.line, self.column, suffix
+        if self.log_value:
+            suffix += " log {}".format(self.log_value)
+        return "<{} {}:{}:{}{}>".format(
+            kind, self.url, self.line, self.column, suffix
         )
 
 
@@ -216,6 +270,7 @@ class Frame(object):
         "line",
         "column",
         "arguments",
+        "this_object",
         "oldest",
     )
 
@@ -224,6 +279,7 @@ class Frame(object):
         self.display_name = form.get("displayName") or "(anonymous)"
         self.type = form.get("type", "")
         self.arguments = form.get("arguments") or []
+        self.this_object = _grip_to_python(form.get("this"))
         self.oldest = bool(form.get("oldest"))
 
         where = form.get("where") or {}
@@ -329,6 +385,8 @@ class Debugger(object):
         self._source_urls = {}  # {source actor: url}
         self._auto_resume_after = None
         self._watchdog = None
+        self._console_actor = None
+        self._log_entries = deque(maxlen=_MAX_LOG_ENTRIES)
 
     # ── 状态 ──
 
@@ -434,6 +492,7 @@ class Debugger(object):
         self._breakpoints = []
         self._sources_by_url = {}
         self._source_urls = {}
+        self._console_actor = None
         self._disarm_watchdog()
         with self._state_lock:
             self._paused = None
@@ -472,7 +531,12 @@ class Debugger(object):
 
         self._target_actor = target.get("actor")
         self._thread_actor = thread_actor
+        self._console_actor = target.get("consoleActor")
         self._rdp.request(thread_actor, "attach", options={})
+        if self._console_actor:
+            self._rdp.on_event(
+                "consoleAPICall", self._handle_console_message, self._console_actor
+            )
 
     def _require_started(self):
         if not self.started:
@@ -562,7 +626,15 @@ class Debugger(object):
             merged.update(int(line) for line in self._breakpoint_positions(source))
         return sorted(merged)
 
-    def set_breakpoint(self, url, line, column=None, condition=None):
+    def set_breakpoint(
+        self,
+        url,
+        line,
+        column=None,
+        condition=None,
+        log_value=None,
+        log_stacktrace=False,
+    ):
         """在指定源的指定行下断点。
 
         Firefox 只接受落在真实断点位置上的断点，行列不匹配时会被静默忽略。
@@ -576,6 +648,11 @@ class Debugger(object):
                 表达式抛异常时**仍会暂停**，此时
                 ``PausedState.why`` 为 ``'breakpointConditionThrown'``，
                 ``PausedState.message`` 是抛出的信息。
+            log_value: 日志断点。给了它就**不再暂停**，而是在每次命中时把该
+                表达式的求值结果作为 console 消息输出。由于暂停期间无法求
+                任意表达式，这是在运行中观察变量的主要手段：配合
+                ``page.console`` 即可拿到输出。
+            log_stacktrace: 日志断点是否附带调用栈。
 
         Returns:
             Breakpoint
@@ -601,6 +678,10 @@ class Debugger(object):
         options = {}
         if condition:
             options["condition"] = condition
+        if log_value:
+            options["logValue"] = log_value
+            if log_stacktrace:
+                options["showStacktrace"] = True
 
         # 同时传 sourceUrl 与 sourceId：服务端在有 sourceUrl 时会把断点应用到
         # 所有同 URL 的源（正是内联脚本需要的），sourceId 只参与定位键。
@@ -617,7 +698,7 @@ class Debugger(object):
         )
 
         breakpoint_ = Breakpoint(
-            source.url, int(line), int(column), source.actor, condition
+            source.url, int(line), int(column), source.actor, condition, log_value
         )
         self._breakpoints.append(breakpoint_)
         return breakpoint_
@@ -1047,6 +1128,7 @@ class Debugger(object):
 
         Returns:
             dict: 变量名到值的映射。无法序列化为原生值的对象保留其 RDP grip。
+            当这一帧有 ``this`` 时，它会以 ``'this'`` 为键一并返回。
 
         Raises:
             DebuggerError: 当前未暂停
@@ -1083,7 +1165,22 @@ class Debugger(object):
         # 由外到内合并，内层同名变量覆盖外层
         for node in reversed(chain):
             merged.update(self._bindings_to_dict(node.get("bindings") or {}))
+
+        # this 不在环境绑定里，它挂在帧上。用 'this' 当键不会和局部变量冲突
+        # （this 是保留字，不可能被用作变量名）。
+        this_object = self._frame_this(frame, state)
+        if this_object is not None:
+            merged["this"] = this_object
         return merged
+
+    @staticmethod
+    def _frame_this(frame, state):
+        """取出这一帧的 this；未指定帧时用当前暂停帧。"""
+        if isinstance(frame, Frame):
+            return frame.this_object
+        if frame is None and state.frame is not None:
+            return state.frame.this_object
+        return None
 
     @staticmethod
     def _bindings_to_dict(bindings):
@@ -1150,18 +1247,23 @@ class Debugger(object):
             return [result[name] for name in sorted(numeric, key=int)]
         return result
 
-    def get_property(self, obj, name):
+    def get_property(self, obj, name, own_only=False):
         """按名字取对象的单个属性。
 
         比 :meth:`expand` 更适合大对象：``window`` 有上千个属性，全量展开既慢
         又会被 ``max_items`` 截断。
 
+        按 JS 的正常语义解析：自有属性找不到时继续沿原型链找，所以类的方法
+        （它们挂在原型上，不是实例的自有属性）也能取到。
+
         Args:
             obj: :class:`RemoteObject` 或对象 actor id。
             name: 属性名。
+            own_only: 只查自有属性，不走原型链。
 
         Returns:
-            属性值；不存在时返回 None。
+            属性值；不存在时返回 None。访问器属性返回 ``'<accessor>'``，
+            要拿真实值用 :meth:`invoke_getter`。
 
         Raises:
             DebuggerError: 当前未暂停，或该值不是可展开的对象
@@ -1174,11 +1276,60 @@ class Debugger(object):
         if not actor:
             raise DebuggerError("该值不是可展开的对象: {!r}".format(obj))
 
-        reply = self._rdp.request(actor, "property", name=name)
-        descriptor = reply.get("descriptor")
-        if descriptor is None:
-            return None
-        return _descriptor_value(descriptor)
+        # 原型链一般只有几层，设个上限防止环形原型导致死循环
+        for _hop in range(_MAX_PROTOTYPE_HOPS):
+            descriptor = self._rdp.request(actor, "property", name=name).get(
+                "descriptor"
+            )
+            if descriptor is not None:
+                return _descriptor_value(descriptor)
+            if own_only:
+                return None
+
+            proto = self._rdp.request(actor, "prototype").get("prototype")
+            actor = proto.get("actor") if isinstance(proto, dict) else None
+            if not actor:
+                return None
+        return None
+
+    def global_object(self, obj=None):
+        """取全局对象（页面里的 ``window``）。
+
+        全局作用域的绑定来自全局对象本身，不以变量形式出现在环境链里，所以
+        ``scope(include_parents=True)`` 里也看不到 ``window``。
+
+        Args:
+            obj: 从哪个对象所属的全局取。默认用当前帧的 ``this``，取不到时
+                用作用域里任意一个远端对象——同一个页面里它们的全局是同一个。
+
+        Returns:
+            RemoteObject: 全局对象；取不到时返回 None。
+
+        Raises:
+            DebuggerError: 当前未暂停，或找不到可用来定位全局的对象
+        """
+        self._require_started()
+        if not self.paused:
+            raise DebuggerError("只能在暂停状态下读取全局对象")
+
+        if obj is None:
+            obj = self._any_object_in_scope()
+        actor = obj.actor if isinstance(obj, RemoteObject) else obj
+        if not actor:
+            raise DebuggerError("找不到可用来定位全局的对象，请显式传入 obj")
+
+        return _grip_to_python(self._rdp.request(actor, "global").get("global"))
+
+    def _any_object_in_scope(self):
+        """随便找一个远端对象，用来定位它所属的全局。"""
+        state = self.paused_state
+        if state is not None and state.frame is not None:
+            if isinstance(state.frame.this_object, RemoteObject):
+                return state.frame.this_object
+        for value in self.scope().values():
+            if isinstance(value, RemoteObject):
+                return value
+        return None
 
     def constructor_name(self, obj):
         """取对象的构造函数名，例如自定义类实例返回 ``"Cart"``。
@@ -1216,3 +1367,256 @@ class Debugger(object):
         ctor = (descriptor or {}).get("value") or {}
         # 函数 grip 带 name / displayName
         return ctor.get("name") or ctor.get("displayName") or fallback
+
+    def logs(self, clear=True):
+        """取回日志断点产生的输出。
+
+        日志断点的消息是由调试器注入 DevTools 控制台管道的，**不经过真实的
+        console API**，所以 ``page.console`` 看不到它们，只能从这里读。
+
+        Args:
+            clear: 取回后是否清空缓冲。
+
+        Returns:
+            list[dict]: 每条含 ``values``（表达式求值结果的列表）、``url``、
+            ``line``、``is_error``（表达式求值抛异常时为 True）、
+            ``stacktrace``（仅在 ``log_stacktrace=True`` 时非空）。
+        """
+        with self._state_lock:
+            entries = list(self._log_entries)
+            if clear:
+                self._log_entries.clear()
+        return entries
+
+    def wait_logs(self, count=1, timeout=10):
+        """等待日志断点产生至少 ``count`` 条输出后取回。
+
+        日志断点不暂停执行，消息是异步到达的，直接调用 :meth:`logs` 可能取到空。
+
+        Returns:
+            list[dict]: 超时则返回已收到的部分。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._state_lock:
+                enough = len(self._log_entries) >= count
+            if enough:
+                break
+            time.sleep(0.05)
+        return self.logs()
+
+    def _handle_console_message(self, packet):
+        """收集日志断点的输出，忽略页面自身的 console 调用。"""
+        message = packet.get("message") or {}
+        level = message.get("level") or ""
+        if not level.startswith("logPoint"):
+            return
+
+        entry = {
+            "values": [_grip_to_python(arg) for arg in (message.get("arguments") or [])],
+            "url": message.get("filename") or "",
+            "line": message.get("lineNumber"),
+            "is_error": level.endswith("Error"),
+            "stacktrace": message.get("stacktrace") or [],
+        }
+        with self._state_lock:
+            self._log_entries.append(entry)
+
+    def read_string(self, value):
+        """取回被截断的超长字符串的完整内容。
+
+        Args:
+            value: :class:`RemoteString`，或普通 ``str``（原样返回）。
+
+        Returns:
+            str
+        """
+        if not isinstance(value, RemoteString):
+            return value
+
+        self._require_started()
+        rest = self._rdp.request(
+            value.actor, "substring", start=len(value) - 1, end=value.length
+        ).get("substring", "")
+        return str(value)[:-1] + rest
+
+    def entries(self, obj, max_items=1000):
+        """读取 ``Map`` / ``Set`` / ``WeakMap`` 等的完整条目。
+
+        这类容器的内容不是普通属性，``expand()`` 看不到，preview 也只带前十项。
+
+        Args:
+            obj: :class:`RemoteObject` 或对象 actor id。
+            max_items: 最多取回多少条。
+
+        Returns:
+            ``Map`` 返回 ``{键: 值}``；``Set`` 返回值的列表。
+
+        Raises:
+            DebuggerError: 当前未暂停，或该对象不支持条目枚举
+        """
+        actor = self._object_actor(obj, "读取条目")
+
+        # 响应把迭代器 actor 的 form 嵌在 iterator 键下：{type, actor, count}
+        iterator = self._rdp.request(actor, "enumEntries").get("iterator") or {}
+        if not iterator.get("actor"):
+            raise DebuggerError("该对象没有可枚举的条目: {!r}".format(obj))
+
+        count = min(int(iterator.get("count") or 0), int(max_items))
+        if not count:
+            return {}
+        own = (
+            self._rdp.request(
+                iterator["actor"], "slice", start=0, count=count
+            ).get("ownProperties")
+            or {}
+        )
+
+        # Map 的条目是 {type: "mapEntry", preview: {key, value}}，Set 是裸 grip
+        pairs = {}
+        values = []
+        for _index, descriptor in sorted(own.items(), key=lambda kv: int(kv[0])):
+            raw = (descriptor or {}).get("value")
+            if isinstance(raw, dict) and raw.get("type") == "mapEntry":
+                preview = raw.get("preview") or {}
+                key = _grip_to_python(preview.get("key"))
+                pairs[key if isinstance(key, str) else repr(key)] = _grip_to_python(
+                    preview.get("value")
+                )
+            else:
+                values.append(_grip_to_python(raw))
+        return pairs if pairs else values
+
+    def call(self, func, args=None, this=None):
+        """远程调用一个已存在的函数对象。
+
+        暂停期间无法求任意表达式（协议限制），但可以调用页面里已有的函数。
+        例如从作用域取到 ``JSON.stringify`` 再调用它，或直接调业务函数复现问题。
+
+        Args:
+            func: 指向函数的 :class:`RemoteObject` 或 actor id。
+            args: 参数列表。基本类型直接给值，要传远端对象则给
+                :class:`RemoteObject`。
+            this: 调用时的 ``this``，同样支持 :class:`RemoteObject`。
+
+        Returns:
+            返回值（已解码）。
+
+        Raises:
+            DebuggerError: 当前未暂停、目标不是函数，或调用过程中抛异常
+        """
+        actor = self._object_actor(func, "调用函数")
+
+        reply = self._rdp.request(
+            actor,
+            "apply",
+            context=_to_grip_argument(this),
+            arguments=[_to_grip_argument(a) for a in (args or [])],
+        )
+        return self._unwrap_completion(reply.get("value"), "函数调用")
+
+    def invoke_getter(self, obj, name):
+        """调用属性的 getter 并返回其结果。
+
+        ``scope()`` / ``expand()`` 对访问器属性只会显示 ``'<accessor>'``，因为
+        读取它意味着执行页面代码，不能默认进行。需要真实值时用本方法。
+
+        Raises:
+            DebuggerError: 当前未暂停，或 getter 执行时抛异常
+        """
+        actor = self._object_actor(obj, "调用 getter")
+
+        reply = self._rdp.request(actor, "propertyValue", name=name, receiverId=None)
+        return self._unwrap_completion(reply.get("value"), "getter {}".format(name))
+
+    def promise_state(self, obj):
+        """读取 Promise 的状态。
+
+        Returns:
+            dict: 含 ``state``（``pending`` / ``fulfilled`` / ``rejected``）、
+            ``value`` 或 ``reason``、``creation_timestamp``、``time_to_settle``。
+
+        Raises:
+            DebuggerError: 当前未暂停，或该对象不是 Promise
+        """
+        actor = self._object_actor(obj, "读取 Promise 状态")
+
+        # 结果嵌在同名键下
+        reply = self._rdp.request(actor, "promiseState").get("promiseState") or {}
+        if not reply.get("state"):
+            raise DebuggerError("该对象不是 Promise: {!r}".format(obj))
+        return {
+            "state": reply.get("state"),
+            "value": _grip_to_python(reply.get("value"))
+            if reply.get("value") is not None
+            else None,
+            "reason": _grip_to_python(reply.get("reason"))
+            if reply.get("reason") is not None
+            else None,
+            "creation_timestamp": reply.get("creationTimestamp"),
+            "time_to_settle": reply.get("timeToSettle"),
+        }
+
+    def watch_property(self, obj, name, on="set", label=None):
+        """在属性被读或被写时暂停。
+
+        CDP 没有对应能力。适合排查「这个值是被谁改掉的」。
+
+        目标属性必须**已经存在**、可配置、且是数据属性（不是 getter/setter）；
+        不满足时服务端会静默忽略（该请求是 oneway，没有回执可判断）。
+
+        Args:
+            obj: :class:`RemoteObject` 或对象 actor id。
+            name: 属性名。
+            on: ``'set'`` 写入时、``'get'`` 读取时、``'getorset'`` 两者皆可。
+            label: 暂停时显示的标签，默认用属性名。
+
+        Returns:
+            self
+        """
+        if on not in ("get", "set", "getorset"):
+            raise DebuggerError("on 必须是 'get' / 'set' / 'getorset'")
+        actor = self._object_actor(obj, "设置监视点")
+
+        # addWatchpoint 是 oneway，服务端不回包，用 request() 会一直等到超时
+        self._rdp.send(
+            {
+                "to": actor,
+                "type": "addWatchpoint",
+                "property": name,
+                "label": label or name,
+                "watchpointType": on,
+            }
+        )
+        return self
+
+    def unwatch_property(self, obj, name=None):
+        """移除监视点；``name`` 省略时移除该对象上的全部监视点。"""
+        actor = self._object_actor(obj, "移除监视点")
+
+        if name is None:
+            self._rdp.send({"to": actor, "type": "removeWatchpoints"})
+        else:
+            self._rdp.send(
+                {"to": actor, "type": "removeWatchpoint", "property": name}
+            )
+        return self
+
+    def _object_actor(self, obj, what):
+        """校验暂停状态并取出对象 actor id。"""
+        self._require_started()
+        if not self.paused:
+            raise DebuggerError("只能在暂停状态下{}".format(what))
+        actor = obj.actor if isinstance(obj, RemoteObject) else obj
+        if not actor:
+            raise DebuggerError("该值不是可操作的对象: {!r}".format(obj))
+        return actor
+
+    def _unwrap_completion(self, completion, what):
+        """展开 ``{return|throw}`` 形式的执行结果。"""
+        if not isinstance(completion, dict):
+            return None
+        if "throw" in completion and completion["throw"] is not None:
+            thrown = _grip_to_python(completion["throw"])
+            raise DebuggerError("{}抛出异常: {!r}".format(what, thrown))
+        return _grip_to_python(completion.get("return"))

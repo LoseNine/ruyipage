@@ -46,6 +46,8 @@ EVENT_TYPES = frozenset(
         "workerListChanged",
         "serviceWorkerRegistrationListChanged",
         "processListChanged",
+        # console actor（日志断点的输出走这里）
+        "consoleAPICall",
         # watcher actor
         "target-available-form",
         "target-destroyed-form",

@@ -870,6 +870,239 @@ def test_restart_frame_reruns_the_current_call(complex_debug_page):
     worker.join(timeout=30)
 
 
+@pytest.fixture
+def probe_paused(complex_debug_page):
+    """停在 inspectProbe 内部，并把 probe 对象交给测试。"""
+    debugger = complex_debug_page.debugger
+    debugger.set_breakpoint(COMPLEX_SOURCE, _line_of(r'const marker = "inspect-here"'))
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return window.buildProbe();"
+    )
+    state = debugger.wait_paused(timeout=30)
+    assert state is not None
+
+    probe = debugger.scope()["probe"]
+    assert isinstance(probe, RemoteObject)
+
+    yield debugger, probe
+
+    debugger.clear_breakpoints()
+    if debugger.paused:
+        debugger.resume()
+    worker.join(timeout=30)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_entries_reads_real_map_and_set_contents(probe_paused):
+    """Map/Set 的内容不是普通属性，expand() 看不到。"""
+    debugger, probe = probe_paused
+
+    map_obj = debugger.get_property(probe, "map")
+    assert debugger.entries(map_obj) == {"alpha": 1, "beta": 2}
+
+    set_obj = debugger.get_property(probe, "set")
+    assert sorted(debugger.entries(set_obj)) == ["x", "y", "z"]
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_invoke_getter_runs_the_accessor(probe_paused):
+    debugger, probe = probe_paused
+
+    # 默认不执行访问器，只标注
+    assert debugger.expand(probe)["computed"] == "<accessor>"
+    # 显式调用才拿到真实值
+    assert debugger.invoke_getter(probe, "computed") == "from-getter"
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_invoke_getter_surfaces_a_throwing_accessor(probe_paused):
+    debugger, probe = probe_paused
+
+    with pytest.raises(DebuggerError, match="抛出异常"):
+        debugger.invoke_getter(probe, "boom")
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_call_invokes_a_page_function_while_paused(probe_paused):
+    """暂停时求不了任意表达式，但可以调用页面里已有的函数。"""
+    debugger, probe = probe_paused
+
+    double = debugger.get_property(probe, "double")
+    assert debugger.call(double, args=[21]) == 42
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_long_string_can_be_read_in_full(probe_paused):
+    debugger, probe = probe_paused
+
+    text = debugger.get_property(probe, "longText")
+    assert text.endswith("…"), "超长字符串应当先给截断版"
+    assert len(text) < 20000
+
+    full = debugger.read_string(text)
+    assert len(full) == 20000
+    assert set(full) == {"L"}
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_promise_state_is_readable(probe_paused):
+    debugger, probe = probe_paused
+
+    promise = debugger.get_property(probe, "promise")
+    state = debugger.promise_state(promise)
+
+    assert state["state"] == "fulfilled"
+    assert state["value"] == 99
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_log_point_reports_without_pausing(complex_debug_page):
+    """日志断点只输出消息，不打断执行。"""
+    debugger = complex_debug_page.debugger
+
+    debugger.set_breakpoint(
+        COMPLEX_SOURCE, _line_of(r"const amount = this\.lineTotal"), log_value="i"
+    )
+
+    # 不需要后台线程：日志断点不会阻塞
+    result = complex_debug_page.run_js("return window.buildCart();")
+
+    assert result["total"] == 32.4
+    assert debugger.paused is False
+
+    entries = debugger.wait_logs(count=3, timeout=10)
+    debugger.clear_breakpoints()
+
+    # 购物车有三行，每行命中一次，依次记录循环下标
+    assert [e["values"][0] for e in entries] == [0, 1, 2]
+    assert all(e["is_error"] is False for e in entries)
+    assert entries[0]["url"].endswith(COMPLEX_SOURCE)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_log_point_output_is_not_visible_to_page_console(complex_debug_page):
+    """日志断点不经过真实 console API，page.console 看不到。"""
+    debugger = complex_debug_page.debugger
+    complex_debug_page.console.start()
+
+    debugger.set_breakpoint(
+        COMPLEX_SOURCE, _line_of(r"const amount = this\.lineTotal"), log_value="i"
+    )
+    complex_debug_page.run_js("return window.buildCart();")
+    assert debugger.wait_logs(count=3, timeout=10)
+
+    from_page_console = complex_debug_page.console.get()
+    complex_debug_page.console.stop()
+    debugger.clear_breakpoints()
+
+    assert from_page_console == []
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_log_point_records_a_failing_expression(complex_debug_page):
+    debugger = complex_debug_page.debugger
+
+    debugger.set_breakpoint(
+        COMPLEX_SOURCE,
+        _line_of(r"const amount = this\.lineTotal"),
+        log_value="nosuchvariable",
+    )
+    complex_debug_page.run_js("return window.buildCart();")
+
+    entries = debugger.wait_logs(count=1, timeout=10)
+    debugger.clear_breakpoints()
+
+    assert entries[0]["is_error"] is True
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_watchpoint_pauses_when_a_property_is_written(complex_debug_page):
+    """CDP 没有的能力：属性被写入时暂停。"""
+    debugger = complex_debug_page.debugger
+    debugger.set_breakpoint(COMPLEX_SOURCE, _line_of(r'const marker = "inspect-here"'))
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return window.buildProbe();"
+    )
+    assert debugger.wait_paused(timeout=30) is not None
+
+    probe = debugger.scope()["probe"]
+    debugger.watch_property(probe, "hits", on="set")
+    debugger.clear_breakpoints()
+    debugger.resume()
+    worker.join(timeout=30)
+
+    # 写入被监视的属性应当断下
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return (window.probe.hits = 1);"
+    )
+    state = debugger.wait_paused(timeout=20)
+
+    assert state is not None, "写入被监视的属性应当暂停"
+
+    debugger.resume()
+    worker.join(timeout=20)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_prototype_methods_are_reachable_and_callable(probe_paused):
+    """类的方法挂在原型上，不是实例的自有属性。"""
+    debugger, probe = probe_paused
+
+    # double 是 probe 的自有属性
+    assert debugger.call(debugger.get_property(probe, "double"), args=[21]) == 42
+
+    # hasOwnProperty 来自 Object.prototype，要走原型链才找得到
+    inherited = debugger.get_property(probe, "hasOwnProperty")
+    assert isinstance(inherited, RemoteObject)
+    assert debugger.get_property(probe, "hasOwnProperty", own_only=True) is None
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_global_object_reaches_window(probe_paused):
+    """全局绑定不出现在环境链里，scope() 看不到 window。"""
+    debugger, probe = probe_paused
+
+    window = debugger.global_object()
+
+    assert window.class_name == "Window"
+    # probe 是在 buildProbe 里挂到 window 上的
+    assert debugger.get_property(window, "probe") is not None
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_scope_exposes_this(complex_debug_page):
+    debugger = complex_debug_page.debugger
+    debugger.set_breakpoint(COMPLEX_SOURCE, _line_of(r"return sum;"))
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return window.buildCart();"
+    )
+    assert debugger.wait_paused(timeout=30) is not None
+
+    this_object = debugger.scope()["this"]
+    assert debugger.constructor_name(this_object) == "Cart"
+    assert debugger.frames()[0].this_object == this_object
+
+    debugger.clear_breakpoints()
+    debugger.resume()
+    worker.join(timeout=30)
+
+
 @pytest.mark.feature
 @pytest.mark.browser
 def test_start_without_enable_debugger_raises_actionable_error(

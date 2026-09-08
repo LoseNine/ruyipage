@@ -100,6 +100,34 @@ window.crash = function () {
   return data.user.profile.name;
 };
 
+// 供「值检查补齐」测试：Map/Set、getter、长字符串、Promise、函数
+window.buildProbe = function () {
+  const probe = {
+    map: new Map([["alpha", 1], ["beta", 2]]),
+    set: new Set(["x", "y", "z"]),
+    longText: "L".repeat(20000),
+    promise: Promise.resolve(99),
+    double: function (n) { return n * 2; },
+    // 监视点只能作用在已存在、可配置的数据属性上
+    hits: 0,
+  };
+  Object.defineProperty(probe, "computed", {
+    enumerable: true,
+    get: function () { return "from-getter"; },
+  });
+  Object.defineProperty(probe, "boom", {
+    enumerable: true,
+    get: function () { throw new TypeError("getter failed"); },
+  });
+  window.probe = probe;
+  return inspectProbe(probe);
+};
+
+function inspectProbe(probe) {
+  const marker = "inspect-here";
+  return probe.map.size + probe.set.size;
+}
+
 // 供「事件断点」测试：点击按钮会走到这里
 window.clickCount = 0;
 function onDemoClick(event) {

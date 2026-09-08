@@ -19,7 +19,7 @@
 > - Built-in **HTTP / SOCKS5 password proxy** support, including **one password proxy per tab**
 > - Built on **Firefox + WebDriver BiDi**
 > - Can directly obtain **closed shadow root** nodes
-> - Built-in **JS breakpoint debugging** (`page.debugger`): breakpoints, conditional breakpoints, stepping, call stack, scope, source reading, pause on exception
+> - Built-in **JS breakpoint debugging** (`page.debugger`): breakpoints, conditional breakpoints, log points, stepping, call stack, scope, source reading, pause on exception, property watchpoints
 > - Better suited for **high-risk scenarios**
 
 [![PyPI version](https://img.shields.io/pypi/v/ruyiPage.svg)](https://pypi.org/project/ruyiPage/)
@@ -41,8 +41,8 @@
 🚀 Multiple routes are available: an ultra-cheap 0.02x OpenAI promotional group (limited time), a 0.25x OpenAI group, 0.7x Claude with 95% fixed caching, and a 1.2x Claude Max route. A public status page shows the availability, latency, and health of every group in real time, and 7×24 human technical support (not a bot) responds quickly to developer requests.<br>
 
 🦊 Covers the full GPT 5.4 / 5.5 series plus the Kiro and Max routes for Claude Opus 4.6 / 4.7 / 4.8. Clean, stable, and durable for everyday use — used by Ruyi itself: <a href="http://www.fastaitoken.com/register">http://www.fastaitoken.com/register</a>
-</td>
-</tr>
+    </td>
+  </tr>
 
 </table>
 
@@ -236,7 +236,7 @@ page.quit()
 Where:
 
 - `close_on_exit=True` means the browser started by `ruyiPage` is closed automatically when the Python process exits.
-- By default, new launches choose a random available remote-debugging port in `10000-65535`. Use `page.browser.address` if another process needs to attach, or pass `port=12000` / another high fixed port when you explicitly need a stable address.
+- By default, new launches choose a random available remote-debugging port in `10000-32767` (below the OS dynamic TCP port range, so a port that probed free cannot be grabbed by an outbound connection before Firefox binds it). Use `page.browser.address` if another process needs to attach, or pass `port=12000` / another high fixed port when you explicitly need a stable address.
 - If you want to keep the browser window open for manual follow-up after the script exits, set `close_on_exit=False`.
 - If you are attaching to an existing browser through `attach()` or `existing_only(True)`, Python exit only disconnects the session even when `close_on_exit=True`; it does not close the external browser process.
 
@@ -627,7 +627,7 @@ Before diving into the details, this table gives a quick overview of what `ruyiP
 | Browser-level tools | `page.browser_tools` | user contexts, client windows |
 | Script capabilities | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms, remote handles, preload scripts |
 | Emulation | `page.emulation` | UA, viewport, screen, orientation, media features, viewport meta, JS toggle |
-| JS debugging | `page.debugger` | Breakpoints, conditional breakpoints, event/XHR breakpoints, stepping, call stack, scope, source reading, object expansion, pause on exception, blackboxing |
+| JS debugging | `page.debugger` | Breakpoints, conditional breakpoints, log points, event/XHR breakpoints, property watchpoints, stepping, call stack, scope, source reading, object expansion, Map/Set entries, getter invocation, remote function calls, promise state, pause on exception, blackboxing |
 | WebExtension | `page.extensions` | Install unpacked extensions, install xpi, uninstall |
 | Local storage | `page.local_storage` / `page.session_storage` | Read and write local/session storage |
 
@@ -1723,6 +1723,23 @@ When `column` is omitted it is resolved from the source's real breakpoint positi
 
 Breakpoints are keyed by URL, and the server re-applies them after navigation, so there is no need to set them again.
 
+### Log points
+
+Passing `log_value` turns a breakpoint into a log point: it **does not pause**, it just records the value of the expression. Since arbitrary expressions cannot be evaluated while paused (see "Current limitations"), this is the easiest way to watch a running variable — especially one that changes on every loop iteration.
+
+```python
+page.debugger.set_breakpoint('app.js', 42, log_value='quantity, subtotal')
+
+page.run_js('return window.buildCart();')     # does not block, no background thread needed
+
+for entry in page.debugger.wait_logs(count=3):
+    print(entry['values'], entry['line'])     # [1, 12.5] 42
+```
+
+Conditions and log values combine, so you can record only the iterations you care about. Pass `log_stacktrace=True` to attach the call stack.
+
+> These messages are injected straight into the DevTools console pipeline by the debugger and **never go through the real console API**, so `page.console` cannot see them — read them from `debugger.logs()` / `wait_logs()`. Conversely, the page's own `console.log` calls never leak into them.
+
 ### Pausing and stepping
 
 ```python
@@ -1742,13 +1759,22 @@ page.debugger.on_paused(lambda s: print(s))      # callback style
 
 ```python
 for f in page.debugger.frames():
-    print(f.display_name, f.url, f.line, f.arguments)
+    print(f.display_name, f.url, f.line, f.arguments, f.this_object)
 
-scope = page.debugger.scope()                      # locals + function arguments
+scope = page.debugger.scope()                      # locals + arguments + this
 scope = page.debugger.scope(include_parents=True)  # also closures and globals
 ```
 
 `scope()` walks out to the **function boundary** by default (the current block plus its enclosing function), stopping before the global scope. Reading only the innermost block would show a single uninitialised variable when paused on `const x = ...`, with every function argument missing.
+
+`this` is not an environment binding — it lives on the frame — and `scope()` returns it under the `'this'` key (`this` is a reserved word, so it can never collide with a local).
+
+The global object is likewise absent from the environment chain, so reach `window` like this:
+
+```python
+window = page.debugger.global_object()
+page.debugger.get_property(window, 'appConfig')
+```
 
 ### Expanding objects
 
@@ -1771,7 +1797,56 @@ page.debugger.constructor_name(obj)         # real class name, e.g. 'Cart'
 >
 > `window` has over a thousand properties, so a full `expand()` gets cut off at `max_items` (a warning is logged) — use `get_property()` in that case.
 
+`get_property()` resolves the way normal JS property access does: if there is no own property it keeps looking up the prototype chain, so class methods (which live on the prototype) are reachable too. Pass `own_only=True` to restrict it to own properties.
+
 `RemoteObject` equality compares the class name and contents only, **not the actor id**. Object actors are recreated on every resume, so comparing by actor would report every object as changed when diffing scope snapshots across a step.
+
+### Reading things that are not plain properties
+
+`expand()` only sees plain properties. These each need their own call:
+
+```python
+# Map / Set entries are not properties, and the preview carries at most ten
+page.debugger.entries(obj)          # Map -> {key: value}; Set -> [value, ...]
+
+# Accessors show up as '<accessor>' by default; reading one runs page code
+page.debugger.invoke_getter(obj, 'total')
+
+# Very long strings arrive truncated; used as a plain str you get the short form
+page.debugger.read_string(scope['html'])
+
+# Promise state and result
+page.debugger.promise_state(obj)    # {'state': 'fulfilled', 'value': 99, ...}
+```
+
+### Calling functions remotely
+
+Arbitrary expressions cannot be evaluated while paused, but **functions that already exist on the page** can be called — including the business code itself:
+
+```python
+fn = page.debugger.get_property(scope['app'], 'formatPrice')
+print(page.debugger.call(fn, args=[12.5]))            # '$12.50'
+
+# Both arguments and `this` accept remote objects
+page.debugger.call(fn, args=[scope['item']], this=scope['app'])
+```
+
+An exception thrown inside the function is surfaced as a `DebuggerError` carrying the thrown value.
+
+### Property watchpoints
+
+For tracking down "what actually wrote this value" — CDP has no equivalent:
+
+```python
+page.debugger.watch_property(obj, 'token', on='set')   # or 'get' / 'getorset'
+
+state = page.debugger.wait_paused(timeout=30)
+print(page.debugger.frames())        # exactly who wrote it
+
+page.debugger.unwatch_property(obj)  # omit the name to clear all watchpoints on the object
+```
+
+> The target property must **already exist**, be configurable, and be a data property (not a getter/setter). Otherwise the server silently ignores the request — it sends no reply, so this cannot be detected client-side.
 
 ### Pause on exception
 
@@ -1874,14 +1949,14 @@ page.debugger.start(auto_resume_after=30)
 
 ### Current limitations
 
-- **Arbitrary expressions cannot be evaluated while paused.** This is a protocol limitation rather than a gap: Firefox's `evaluateJSAsync` never delivers its result during a pause, and the `frame` actor has no eval method. Use `scope()` + `expand()` + `get_property()` to read state instead.
+- **Arbitrary expressions cannot be evaluated while paused.** This is a protocol limitation rather than a gap: Firefox's `evaluateJSAsync` never delivers its result during a pause, and the `frame` actor has no eval method. There are three ways around it: read state with `scope()` + `expand()` + `get_property()`, call existing page functions with `call()`, or record any expression without pausing at all using a **log point**.
 - **Variable values cannot be modified.** The `environment` actor spec declares an empty `methods` map, so it is read-only.
 - **Script source cannot be hot-patched.** Firefox never implemented anything like CDP's `setScriptSource` live edit.
 - **Only the top-level tab is covered**; JS inside iframes and Workers is out of reach.
 - **No source map resolution** — the server only exposes `sourceMapURL` metadata, so minified line numbers must be mapped client-side.
 - RDP is a Firefox-private protocol with no cross-version compatibility guarantee.
 
-See `examples/50_js_debugger.py` and `examples/51_ai_autonomous_debug.py` (the latter shows the full loop where only the page URL is given and the program discovers the code and breakpoint location by itself).
+See `examples/55_js_debugger.py` and `examples/56_ai_autonomous_debug.py` (the latter shows the full loop where only the page URL is given and the program discovers the code and breakpoint location by itself).
 
 ---
 
@@ -1938,8 +2013,8 @@ Suggested order:
 - `52_per_tab_socks5_proxy_browserscan.py` single browser, multiple container tabs, each tab using a different SOCKS5 password proxy
 - `53_duckai_eventstream_capture.py` opens Duck.ai with Firefox, submits a chat prompt, and captures the `POST /duckchat/v1/chat` EventStream response body
 - `54_bing_passive_capture.py` uses `page.capture` to start passive capture before opening Bing search, then prints auto-loaded request/response headers and bodies
-- `50_js_debugger.py` demonstrates `page.debugger`: reading source, setting breakpoints, reading the call stack and scope, stepping
-- `51_ai_autonomous_debug.py` autonomous debugging loop: given only the page URL, the program discovers the JS sources, reads the code, locates a breakpoint line, and inspects the paused state
+- `55_js_debugger.py` `page.debugger` API tour: source, breakpoints, conditional/log points, stepping, stack and scope, object inspection, exception/event/XHR breakpoints, watchpoints, blackboxing
+- `56_ai_autonomous_debug.py` autonomous debugging loop: given only the page URL, discover sources, pick a breakpoint, inspect the throw site, and find a click handler
 
 ---
 

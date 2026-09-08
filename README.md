@@ -19,7 +19,7 @@
 > - 自带 **HTTP / SOCKS5 密码代理**支持，支持**一个 tab 一个密码代理**
 > - 基于 **Firefox + WebDriver BiDi**
 > - 可以直接获取 **closed shadow root** 节点
-> - 内置 **JS 断点调试**（`page.debugger`）：断点 / 条件断点 / 单步 / 调用栈 / 作用域 / 读源码 / 异常暂停
+> - 内置 **JS 断点调试**（`page.debugger`）：断点 / 条件断点 / 日志断点 / 单步 / 调用栈 / 作用域 / 读源码 / 异常暂停 / 属性监视点
 > - 更适合**高风控场景**
 
 [![PyPI version](https://img.shields.io/pypi/v/ruyiPage.svg)](https://pypi.org/project/ruyiPage/)
@@ -236,7 +236,7 @@ page.quit()
 其中：
 
 - `close_on_exit=True` 表示 Python 程序退出时，自动关闭由 `ruyiPage` 启动的浏览器。
-- 默认启动会在 `10000-65535` 中随机选择可用远程调试端口。需要给其他进程接管时，用 `page.browser.address` 获取真实地址；确实需要固定地址时再传 `port=12000` 或其他 1w 以上端口。
+- 默认启动会在 `10000-32767` 中随机选择可用远程调试端口（避开系统 TCP 动态端口段，以免探测通过后端口被出站连接抢走）。需要给其他进程接管时，用 `page.browser.address` 获取真实地址；确实需要固定地址时再传 `port=12000` 或其他 1w 以上端口。
 - 如果你希望脚本退出后保留浏览器窗口继续手动操作，可以改成 `close_on_exit=False`。
 - 如果你用的是 `attach()` 或 `existing_only(True)` 接管已有浏览器，即使开启 `close_on_exit=True`，退出时也只会断开连接，不会误关外部浏览器。
 
@@ -621,7 +621,7 @@ python examples/w3c_bidi/generate_comparison.py --check
 | 浏览器级能力 | `page.browser_tools` | user context、client window |
 | 脚本能力 | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms、远程对象句柄、preload script |
 | Emulation | `page.emulation` | UA、viewport、screen、orientation、媒体特征、viewport meta、JS 开关 |
-| JS 断点调试 | `page.debugger` | 断点、条件断点、事件/XHR 断点、单步、调用栈、作用域、读源码、对象展开、异常暂停、黑盒化 |
+| JS 断点调试 | `page.debugger` | 断点、条件断点、日志断点、事件/XHR 断点、属性监视点、单步、调用栈、作用域、读源码、对象展开、Map/Set 内容、调用 getter、远程调用函数、Promise 状态、异常暂停、黑盒化 |
 | WebExtension | `page.extensions` | 安装目录扩展、安装 xpi、卸载 |
 | 本地存储 | `page.local_storage` / `page.session_storage` | 读写本地存储和会话存储 |
 
@@ -1756,6 +1756,23 @@ page.debugger.clear_breakpoints()
 
 断点按 URL 记录，页面导航后服务端会自动重新应用，不需要重新下。
 
+### 日志断点
+
+给 `log_value` 就变成日志断点：命中时**不暂停**，只把表达式的求值结果记下来。因为暂停期间求不了任意表达式（见「当前限制」），这是观察运行中变量最省事的办法——尤其是循环里每轮的值。
+
+```python
+page.debugger.set_breakpoint('app.js', 42, log_value='quantity, subtotal')
+
+page.run_js('return window.buildCart();')     # 不会阻塞，无需后台线程
+
+for entry in page.debugger.wait_logs(count=3):
+    print(entry['values'], entry['line'])     # [1, 12.5] 42
+```
+
+条件断点和日志断点可以叠加，只在满足条件时记录。`log_stacktrace=True` 会附带调用栈。
+
+> 这类消息是调试器直接注入 DevTools 控制台管道的，**不经过真实的 console API**，所以 `page.console` 看不到，只能从 `debugger.logs()` / `wait_logs()` 读。反过来页面自己的 `console.log` 也不会混进来。
+
 ### 暂停与单步
 
 ```python
@@ -1775,13 +1792,22 @@ page.debugger.on_paused(lambda s: print(s))      # 回调方式
 
 ```python
 for f in page.debugger.frames():
-    print(f.display_name, f.url, f.line, f.arguments)
+    print(f.display_name, f.url, f.line, f.arguments, f.this_object)
 
-scope = page.debugger.scope()                    # 局部变量 + 函数参数
+scope = page.debugger.scope()                    # 局部变量 + 函数参数 + this
 scope = page.debugger.scope(include_parents=True)  # 继续读闭包与全局
 ```
 
 `scope()` 默认沿作用域链读到**函数边界**为止（当前块 + 所属函数），不越过全局。只读最内层块的话，断点停在 `const x = ...` 上时只能看到一个尚未初始化的变量，函数参数会全部缺失。
+
+`this` 不属于环境绑定，它挂在帧上，`scope()` 会以 `'this'` 为键一并给出（`this` 是保留字，不会和局部变量重名）。
+
+全局对象同理不出现在环境链里——`window` 上的东西要这样拿：
+
+```python
+window = page.debugger.global_object()
+page.debugger.get_property(window, 'appConfig')
+```
 
 ### 展开对象
 
@@ -1804,7 +1830,56 @@ page.debugger.constructor_name(obj)         # 取真实类名，例如 'Cart'
 >
 > `window` 有上千个属性，全量 `expand()` 会被 `max_items` 截断（会打警告），这种情况用 `get_property()`。
 
+`get_property()` 按 JS 的正常语义解析：自有属性没有就继续沿原型链找，所以类的方法也取得到（它们挂在原型上）。只要自有属性时传 `own_only=True`。
+
 `RemoteObject` 的相等性只比较类名和内容，**不比较 actor id**。对象 actor 每次 resume 都会重建，否则「单步后哪些变量变了」这类对比会把所有对象都误报成变化。
+
+### 读取普通属性以外的内容
+
+`expand()` 只能看到普通属性，下面这些各有各的取法：
+
+```python
+# Map / Set 的条目不是属性，preview 也只带前十项
+page.debugger.entries(obj)          # Map -> {键: 值}；Set -> [值, ...]
+
+# 访问器属性默认只显示 '<accessor>'，读它意味着执行页面代码
+page.debugger.invoke_getter(obj, 'total')
+
+# 超长字符串随包只回开头一段，当普通 str 用得到的是截断版
+page.debugger.read_string(scope['html'])
+
+# Promise 的状态与结果
+page.debugger.promise_state(obj)    # {'state': 'fulfilled', 'value': 99, ...}
+```
+
+### 远程调用函数
+
+暂停期间求不了任意表达式，但可以**调用页面里已有的函数**——包括业务函数本身：
+
+```python
+fn = page.debugger.get_property(scope['app'], 'formatPrice')
+print(page.debugger.call(fn, args=[12.5]))            # '¥12.50'
+
+# 参数和 this 都可以传远端对象
+page.debugger.call(fn, args=[scope['item']], this=scope['app'])
+```
+
+函数内部抛异常会转成 `DebuggerError`，异常内容在消息里。
+
+### 属性监视点
+
+排查「这个值到底是被谁改掉的」——CDP 没有对应能力：
+
+```python
+page.debugger.watch_property(obj, 'token', on='set')   # 也可 'get' / 'getorset'
+
+state = page.debugger.wait_paused(timeout=30)
+print(page.debugger.frames())        # 谁在写它，一目了然
+
+page.debugger.unwatch_property(obj)  # 省略属性名则清除该对象上的全部监视点
+```
+
+> 目标属性必须**已经存在**、可配置、且是数据属性（不是 getter/setter）。不满足时服务端会静默忽略——这个请求没有回执，无法从客户端判断。
 
 ### 异常时自动暂停
 
@@ -1907,14 +1982,14 @@ page.debugger.start(auto_resume_after=30)
 
 ### 当前限制
 
-- **暂停时无法求任意表达式**。这是协议限制而非未实现：Firefox 的 `evaluateJSAsync` 在暂停期间不投递结果，`frame` actor 也没有 eval 方法。替代做法是用 `scope()` + `expand()` + `get_property()` 读状态。
+- **暂停时无法求任意表达式**。这是协议限制而非未实现：Firefox 的 `evaluateJSAsync` 在暂停期间不投递结果，`frame` actor 也没有 eval 方法。替代做法有三条：`scope()` + `expand()` + `get_property()` 读状态、`call()` 调用页面已有的函数、以及用**日志断点**在不暂停的前提下记录任意表达式。
 - **无法修改变量值**。`environment` actor 的 spec 里 `methods` 是空的，只能读不能写。
 - **无法热替换脚本源码**。Firefox 从未实现 CDP 的 `setScriptSource` 那类 live edit。
 - **只覆盖顶层标签页**，iframe 和 Worker 里的 JS 调试不到。
 - **不做 source map 解析**，服务端只提供 `sourceMapURL` 元数据，压缩代码的行号需要自行映射。
 - RDP 是 Firefox 私有协议，没有跨大版本兼容承诺。
 
-参考示例：`examples/50_js_debugger.py`、`examples/51_ai_autonomous_debug.py`（后者演示只给页面地址、由程序自己发现代码并定位断点的完整闭环）。
+参考示例：`examples/55_js_debugger.py`、`examples/56_ai_autonomous_debug.py`（后者演示只给页面地址、由程序自己发现代码并定位断点的完整闭环）。
 
 ---
 
@@ -1970,11 +2045,11 @@ page.debugger.start(auto_resume_after=30)
 - `42_3_debug_px_context_probe.py` 直接打开 `debug_px.html`，打印 PX challenge iframe 的 browsing context 树，并尝试 attach 到 child context 做最小 DOM / canvas 诊断
 - `46_human_behavior_showcase.py` 演示 bezier / windmouse 两套拟人轨迹算法，并开启鼠标行为可视化
 - `48_smart_fingerprint.py` 演示 `apply_smart_fingerprint()` 一站式智能指纹（geo 探测 + 内核 fpfile + BiDi 仿真）
-- `50_js_debugger.py` 演示 `page.debugger` 断点调试：读源码、下断点、读调用栈与作用域、单步
-- `51_ai_autonomous_debug.py` 自主调试闭环：只给页面地址，由程序自己发现 JS 源、读代码、定位断点行、检查现场
 - `52_per_tab_socks5_proxy_browserscan.py` 单浏览器创建多个 container tabs，并让每个 tab 走不同 SOCKS5 密码代理
 - `53_duckai_eventstream_capture.py` 使用 Firefox 打开 Duck.ai，提交聊天内容，并拦截 `POST /duckchat/v1/chat` 的 EventStream 响应体
 - `54_bing_passive_capture.py` 使用 `page.capture` 先启动被动抓包，再打开 Bing 搜索页，抓自动加载请求的请求头/请求体/响应头/响应体
+- `55_js_debugger.py` `page.debugger` 常用 API：源码、断点、条件/日志断点、单步、栈与作用域、对象检查、异常/事件/XHR 断点、监视点、黑盒
+- `56_ai_autonomous_debug.py` 自主调试闭环：只给页面地址，自己发现源码、断点、异常现场和点击处理器
 
 ---
 
