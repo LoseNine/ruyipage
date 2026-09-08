@@ -31,6 +31,8 @@ class RecordingDriver:
 
 def make_browser(session_id="session-1", responses=None):
     browser = object.__new__(Firefox)
+    browser._options = FirefoxOptions()
+    browser._address = browser._options.address
     browser._driver = RecordingDriver(responses)
     browser._session_id = session_id
     browser._baseline_preload_script_id = None
@@ -185,7 +187,7 @@ def test_context_init_retries_browser_owned_baseline():
 
 def test_reconnect_registers_baseline_for_the_new_session(monkeypatch):
     class ReconnectDriver(RecordingDriver):
-        def __init__(self, address):
+        def __init__(self, address, shared=True):
             super().__init__([{"script": "reconnected-baseline"}])
             self.address = address
             self.session_id = ""

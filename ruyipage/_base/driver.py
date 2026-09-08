@@ -57,16 +57,24 @@ class BrowserBiDiDriver(object):
     _BROWSERS = {}  # {address: BrowserBiDiDriver}
     _lock = threading.Lock()
 
-    def __new__(cls, address):
+    def __new__(cls, address, shared=True):
+        # 自己启动的 Firefox 不走单例：并发启动时两个实例可能短暂落在同一个
+        # 端口上，若共用 driver，后来者的 stop() 会直接掐断先来者的 WebSocket。
+        if not shared:
+            instance = super(BrowserBiDiDriver, cls).__new__(cls)
+            instance._initialized = False
+            instance._shared = False
+            return instance
         with cls._lock:
             if address in cls._BROWSERS:
                 return cls._BROWSERS[address]
             instance = super(BrowserBiDiDriver, cls).__new__(cls)
             instance._initialized = False
+            instance._shared = True
             cls._BROWSERS[address] = instance
             return instance
 
-    def __init__(self, address):
+    def __init__(self, address, shared=True):
         if self._initialized:
             return
         self._initialized = True
@@ -170,9 +178,11 @@ class BrowserBiDiDriver(object):
         """关闭连接和线程（公共方法）"""
         self._stop()
 
-        # 清理单例
-        with self._lock:
-            self._BROWSERS.pop(self.address, None)
+        # 清理单例：只移除自己，别把同地址上别人的注册顺手删掉
+        if getattr(self, "_shared", True):
+            with self._lock:
+                if self._BROWSERS.get(self.address) is self:
+                    self._BROWSERS.pop(self.address, None)
 
         self._initialized = False
 

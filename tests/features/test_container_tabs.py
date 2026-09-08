@@ -299,7 +299,9 @@ def test_browser_try_connect_rejects_missing_context(monkeypatch):
 
     monkeypatch.setattr(browser_module.socket, "socket", lambda *args, **kwargs: fake_socket)
     monkeypatch.setattr(browser_module, "get_bidi_ws_url", lambda *args, **kwargs: "ws")
-    monkeypatch.setattr(browser_module, "BrowserBiDiDriver", lambda address: fake_driver)
+    monkeypatch.setattr(
+        browser_module, "BrowserBiDiDriver", lambda address, shared=True: fake_driver
+    )
 
     assert browser._try_connect() is False
     assert fake_socket.timeout == 0.1
@@ -372,7 +374,9 @@ def test_browser_try_connect_survives_invalid_event_subscription(monkeypatch):
 
     monkeypatch.setattr(browser_module.socket, "socket", lambda *args, **kwargs: fake_socket)
     monkeypatch.setattr(browser_module, "get_bidi_ws_url", lambda *args, **kwargs: "ws")
-    monkeypatch.setattr(browser_module, "BrowserBiDiDriver", lambda address: fake_driver)
+    monkeypatch.setattr(
+        browser_module, "BrowserBiDiDriver", lambda address, shared=True: fake_driver
+    )
 
     assert browser._try_connect() is True
     assert browser._driver is fake_driver

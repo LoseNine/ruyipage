@@ -9,21 +9,36 @@ from ruyipage.errors import BrowserConnectError
 
 
 class _RecordingProcess:
-    def __init__(self, pid):
+    """假进程：被 kill/wait 之后如实变为「已退出」。
+
+    终止逻辑会校验进程是否真的退出、没退出就重试，因此假进程必须忠实地
+    在被终止后让 poll() 返回退出码，否则会误以为终止失败而多杀一轮。
+    """
+
+    def __init__(self, pid, dies=True):
         self.pid = pid
         self.events = []
+        self.returncode = None
+        self._dies = dies
 
     def poll(self):
-        return None
+        return self.returncode
 
     def kill(self):
         self.events.append("kill")
+        if self._dies:
+            self.returncode = -9
 
     def terminate(self):
         self.events.append("terminate")
+        if self._dies:
+            self.returncode = 0
 
     def wait(self, timeout=None):
         self.events.append(("wait", timeout))
+        if self._dies:
+            self.returncode = 0
+        return self.returncode
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +67,9 @@ def test_failed_owned_launch_cleans_every_allocated_resource(monkeypatch, tmp_pa
     monkeypatch.setattr(browser_module.sys, "platform", "win32")
     monkeypatch.setattr(Firefox, "_ensure_launch_port_available", lambda self: None)
     monkeypatch.setattr(Firefox, "_launch_browser", launch)
-    monkeypatch.setattr(Firefox, "_wait_for_connection", lambda self: False)
+    monkeypatch.setattr(
+        Firefox, "_wait_for_connection", lambda self, allow_grace=True: False
+    )
     monkeypatch.setattr(
         browser_module.subprocess,
         "run",

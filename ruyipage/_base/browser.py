@@ -34,6 +34,32 @@ logger = logging.getLogger("ruyipage")
 _BASELINE_PRELOAD_SCRIPT = "() => {}"
 _BASELINE_PRELOAD_ATTEMPTS = 2
 
+# 「连到的 Firefox 不是本实例启动的」的错误标记。
+# 并发启动时两个 Firefox 可能落到同一个端口（监听 socket 带 SO_REUSEADDR，
+# Windows 允许第二个进程绑定已在监听的端口），此时对它做任何破坏性操作
+# （browser.close、按端口杀进程）都会伤及别的实例。
+_FOREIGN_BROWSER_MARKER = "__foreign_browser__"
+
+
+class _ForeignBrowserError(BrowserConnectError):
+    """连到的 Firefox 不是本实例启动的，应换端口重启而非重置它。"""
+
+
+def _is_foreign_browser_error(exc):
+    if isinstance(exc, _ForeignBrowserError):
+        return True
+    return isinstance(exc, BrowserConnectError) and _FOREIGN_BROWSER_MARKER in str(exc)
+
+
+def _normalize_profile_path(path):
+    """把 profile 路径规范到可比较的形式（大小写、分隔符、符号链接）。"""
+    if not path:
+        return ""
+    try:
+        return os.path.normcase(os.path.realpath(os.path.abspath(str(path))))
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.normpath(str(path)))
+
 
 DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS = (
     "firefox.exe",
@@ -574,6 +600,20 @@ class Firefox(object):
     _launch_lock = threading.Lock()
     _RESERVED_PORTS = set()
 
+    # 启动宽限期：retry 预算耗尽后，只要 Firefox 进程还活着就再等一会。
+    # 并发启动多个实例时 Windows 冷启动明显变慢，不给宽限就会把正常实例
+    # 判死重启，白白多起一个进程。默认按 retry 预算的两倍推算，夹在两者之间。
+    _LAUNCH_GRACE_TIMEOUT = 30.0
+    _LAUNCH_GRACE_MIN = 5.0
+
+    # 实例状态的类级默认值：清理路径（quit / atexit / 强杀）必须在任何构造
+    # 阶段都能安全调用，包括 __init__ 中途失败或通过 __new__ 建出的实例。
+    _reserved_port = None
+    _browser_pid = None
+    _session_ownership_verified = False
+    _grace_spent = 0.0
+    _liveness_cache = None
+
     @classmethod
     def _cache_key_for(cls, addr_or_opts=None):
         """仅对显式 attach 场景启用地址级单例缓存。"""
@@ -631,6 +671,14 @@ class Firefox(object):
             self._context_nav_locks_lock = threading.Lock()
             self._reserved_port = None
             self._auto_profile = None  # 自动创建的临时 profile
+            # 是否已通过 moz:profile 确认连上的就是自己启动的 Firefox。
+            # 未确认前不许对它发 browser.close。
+            self._session_ownership_verified = False
+            # session.new 返回的 moz:processID：Windows 上 firefox.exe 是个
+            # launcher stub，Popen 记录的 PID 启动完就退出了，真正的主进程
+            # 要从这里拿。
+            self._browser_pid = None
+            self._grace_spent = 0.0
             self._quit_lock = threading.Lock()
             self._proxy_auth_intercept_id = None
             self._proxy_auth_subscription_id = None
@@ -717,30 +765,114 @@ class Firefox(object):
             self._reserved_port = None
 
     def _terminate_owned_process_tree(self, timeout=5):
+        """终止本实例自己启动的整棵 Firefox 进程树。
+
+        Windows 上 ``firefox.exe`` 是个 launcher stub：它把自己重新拉起一遍
+        然后退出，所以 Popen 记录的 PID 在启动完成时**已经死了**。对着它发
+        ``taskkill /T`` 一个进程都杀不到——失败路径没有 BiDi 连接可用，收尸
+        只能靠这里，于是每一轮失败都漏一整个 Firefox（约 10 个进程）。
+        因此 Windows 上改为按 profile 目录反查真实的主进程。
+        """
         process = self._process
         try:
+            if sys.platform == "win32":
+                self._terminate_windows_process_tree(process, timeout)
+                return
+
             if not process or process.poll() is not None:
                 return
-            if sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-            else:
-                import signal
+            import signal
 
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except (AttributeError, OSError, ProcessLookupError):
-                    process.kill()
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except (AttributeError, OSError, ProcessLookupError):
+                process.kill()
             try:
                 process.wait(timeout=timeout)
             except Exception:
                 pass
         finally:
             self._process = None
+            self._browser_pid = None
+
+    def _terminate_windows_process_tree(self, process, timeout):
+        pids = set()
+        if process is not None and process.poll() is None:
+            pids.add(int(process.pid))
+        if self._browser_pid:
+            pids.add(int(self._browser_pid))
+        pids.update(self._find_own_firefox_pids_windows())
+
+        for pid in pids:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        if process is not None:
+            try:
+                process.wait(timeout=timeout)
+            except Exception:
+                pass
+
+    def _find_own_firefox_pids_windows(self):
+        """按 profile 目录找出本实例 Firefox 的主进程 PID。
+
+        profile 目录每个实例独有，比按端口查可靠：端口撞车正是这条路径要
+        处理的场景，按端口反查会把别人的浏览器一起杀掉。
+        """
+        profile = self._options.profile_path
+        if not profile:
+            return set()
+
+        needles = {
+            os.path.normcase(str(profile)),
+            os.path.normcase(os.path.normpath(str(profile))),
+        }
+        exe_names = {"firefox.exe"}
+        browser_path = self._options.browser_path
+        if browser_path:
+            exe_names.add(os.path.basename(str(browser_path)).lower())
+
+        import json
+
+        name_filter = " OR ".join(
+            "Name='{}'".format(name.replace("'", "''")) for name in sorted(exe_names)
+        )
+        script = (
+            "Get-CimInstance Win32_Process -Filter \"{}\" | "
+            "Select-Object ProcessId, ParentProcessId, CommandLine | "
+            "ConvertTo-Json -Compress"
+        ).format(name_filter)
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", script],
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+            data = json.loads(out.decode(errors="ignore") or "[]")
+        except Exception as exc:
+            logger.debug("按 profile 查询 Firefox 进程失败: %s", exc)
+            return set()
+        if isinstance(data, dict):
+            data = [data]
+
+        roots = set()
+        for item in data or []:
+            cmdline = os.path.normcase(str(item.get("CommandLine") or ""))
+            # 内容进程的命令行里没有 --profile，只有 -contentproc；
+            # 它们随主进程的 taskkill /T 一起退出，这里只收主进程。
+            if "-contentproc" in cmdline:
+                continue
+            if not any(needle in cmdline for needle in needles):
+                continue
+            try:
+                roots.add(int(item.get("ProcessId") or 0))
+            except (TypeError, ValueError):
+                continue
+        roots.discard(0)
+        return roots
 
     def _remove_auto_profile(self, attempts=3, delay=0.3):
         """删除自动创建的临时 profile 目录。
@@ -793,6 +925,77 @@ class Firefox(object):
         self._options._set_port_for_launch(port)
         self._address = self._options.address
         self._reserve_port(port)
+        # 换了端口，之前对「连上的是自己的浏览器」的结论就作废了
+        self._session_ownership_verified = False
+        self._browser_pid = None
+
+    def _rotate_launch_port(self):
+        """重启前换一个端口。
+
+        随机 / 自动端口模式下重新挑一个：旧端口上可能还挂着别人的 Firefox
+        （端口撞车），或自己那个还没退干净的旧进程。固定端口是用户显式指定
+        的，只在确实被占用时才换。
+        """
+        if self._options.auto_port or self._options.random_port:
+            old_port = self._options.port
+            # 旧端口仍在 _RESERVED_PORTS 里，_find_free_port 会自动跳过它
+            new_port = self._find_free_port()
+            self._set_launch_port(new_port)
+            logger.warning("重启 Firefox：端口 %s -> %s", old_port, new_port)
+            return
+        self._ensure_launch_port_available()
+
+    def _can_close_remote_browser(self):
+        """是否允许对当前连接的浏览器发 browser.close。
+
+        显式 attach 的地址是用户指定的，照旧允许；自己启动的必须先通过
+        moz:profile 确认归属——否则端口撞车时会把别的实例的浏览器关掉。
+        """
+        if self._options.is_existing_only:
+            return True
+        return bool(self._session_ownership_verified)
+
+    def _owns_launched_process(self):
+        """本实例是否有一个自己拉起来、且仍存活的 Firefox 进程。"""
+        if self._options.is_existing_only:
+            return False
+        process = self._process
+        return process is not None and process.poll() is None
+
+    # 宽限期里存活探测的节流间隔：Windows 上要跑一次 PowerShell 查进程表
+    _LIVENESS_PROBE_INTERVAL = 2.0
+
+    def _launched_browser_alive(self):
+        """自己启动的 Firefox 是否还活着——比 ``_process.poll()`` 可信。
+
+        Windows 上 Popen 记录的是 launcher stub，启动完就退出了；只看它会把
+        正在冷启动的正常实例判死。stub 退出后改按 profile 反查真实主进程，
+        并做节流避免每次轮询都拉起 PowerShell。
+        """
+        process = self._process
+        if process is None:
+            return False
+        if process.poll() is None:
+            return True
+        if sys.platform != "win32":
+            return False
+
+        now = time.time()
+        cached = self._liveness_cache
+        if cached and now - cached[0] < self._LIVENESS_PROBE_INTERVAL:
+            return cached[1]
+        alive = bool(self._find_own_firefox_pids_windows())
+        self._liveness_cache = (now, alive)
+        return alive
+
+    def _launch_grace_timeout(self):
+        explicit = self._options.retry_grace
+        if explicit is not None:
+            return float(explicit)
+        budget = float(self._options.retry_times + 1) * float(
+            self._options.retry_interval
+        )
+        return max(self._LAUNCH_GRACE_MIN, min(self._LAUNCH_GRACE_TIMEOUT, budget * 2))
 
     @property
     def address(self):
@@ -1047,6 +1250,7 @@ class Firefox(object):
             if self._options.is_existing_only:
                 self._detach_on_exit()
                 self._process = None
+                self._release_reserved_port()
                 with self._lock:
                     self._BROWSERS.pop(self._address, None)
                 self._initialized = False
@@ -1054,10 +1258,13 @@ class Firefox(object):
 
             if self._driver:
                 self._driver.mark_closing()
-            try:
-                self._driver.run("browser.close", timeout=3)
-            except Exception:
-                pass
+                # 归属未确认时不发 browser.close：端口撞车时连上的可能是别的
+                # 实例的浏览器。自己的进程走下面的进程树终止。
+                if self._can_close_remote_browser():
+                    try:
+                        self._driver.run("browser.close", timeout=3)
+                    except Exception:
+                        pass
 
             if self._driver:
                 self._teardown_proxy_auth()
@@ -1084,6 +1291,7 @@ class Firefox(object):
                 self._process = None
 
             self._remove_auto_profile()
+            self._release_reserved_port()
 
             # 清理单例
             with self._lock:
@@ -1144,6 +1352,7 @@ class Firefox(object):
             if not self._options.is_existing_only:
                 self._terminate_owned_process_tree()
                 self._remove_auto_profile()
+            self._release_reserved_port()
             return
 
         if self._should_close_browser_on_exit():
@@ -1161,7 +1370,7 @@ class Firefox(object):
         if self._driver:
             self._teardown_proxy_auth()
             self._driver.stop()
-        self._driver = BrowserBiDiDriver(self._address)
+        self._driver = self._new_driver()
         host, port_str = self._address.rsplit(":", 1)
         ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
         self._driver.start(ws_url)
@@ -1212,31 +1421,54 @@ class Firefox(object):
         # 避免复用已存在的普通窗口，导致 private/user_dir/headless 等参数失效。
         # 这里用类级启动锁把“端口探测 -> 真正启动进程”串成原子区间，
         # 避免并发 launch 时多个实例同时抢占同一端口。
+        self._grace_spent = 0.0
         with self._launch_lock:
             self._ensure_launch_port_available()
             self._launch_browser()
 
-        if self._wait_for_connection():
+        if self._await_launched_browser():
             return
 
-        # 某些环境下首次启动后 remote debugging 端口就绪较慢，
-        # 或出现短暂的僵尸会话，导致首轮重试全部失败。
-        # 这里做一次“重启并重试”兜底，优先提升稳定性（不影响 existing_only 模式）。
+        # 首轮没连上有两种可能：Firefox 起得慢 / 端口被抢；或连上的根本是别的
+        # 实例的浏览器。两种都换一个端口重启，原样复用旧端口好不了。
         if not self._options.is_existing_only:
-            logger.warning("首次启动连接失败，尝试重启 Firefox 后再重试一次...")
             self._terminate_owned_process_tree()
 
             with self._launch_lock:
-                self._ensure_launch_port_available()
+                self._rotate_launch_port()
                 self._launch_browser()
-            if self._wait_for_connection():
+            if self._await_launched_browser():
                 return
 
         raise BrowserConnectError(
             "启动后无法连接到 {}，请检查 Firefox 是否正常启动".format(self._address)
         )
 
-    def _wait_for_connection(self):
+    def _await_launched_browser(self):
+        """等刚启动的 Firefox 可连接；连到别人的浏览器算失败而不是异常。"""
+        try:
+            if self._wait_for_connection():
+                return True
+            logger.warning("首次启动连接失败，尝试重启 Firefox 后再重试一次...")
+        except BrowserConnectError as exc:
+            if not _is_foreign_browser_error(exc):
+                raise
+            logger.warning(
+                "%s 上的 Firefox 不是本实例启动的（端口被其他实例占用），换端口重启...",
+                self._address,
+            )
+        return False
+
+    def _wait_for_connection(self, allow_grace=True):
+        """等待刚启动的 Firefox 可连接。
+
+        先按 retry 预算轮询；预算耗尽后，只要自己的进程还活着就进入宽限期
+        继续等——并发启动时 Windows 冷启动会明显变慢，不给宽限就会把正常实例
+        判死重启。宽限期是整次启动的一份总预算，首轮和重启兜底共用，避免
+        「Firefox 根本起不来」的失败被拖成两倍时间。
+
+        ``_ForeignBrowserError`` 会原样抛出，调用方据此决定换端口重启。
+        """
         deadline = time.time() + max(
             1.0,
             float(self._options.retry_times + 1)
@@ -1246,10 +1478,34 @@ class Firefox(object):
             try:
                 if self._try_connect():
                     return True
-            except BrowserConnectError:
-                pass
+            except BrowserConnectError as exc:
+                if _is_foreign_browser_error(exc):
+                    raise
             time.sleep(min(0.2, max(0.01, deadline - time.time())))
-        return False
+
+        if not allow_grace:
+            return False
+        remaining = self._launch_grace_timeout() - self._grace_spent
+        if remaining <= 0:
+            return False
+
+        grace_started = time.time()
+        grace_deadline = grace_started + remaining
+        try:
+            while time.time() < grace_deadline:
+                # 宽限期不持锁，其它线程的 quit() 随时可能把 _process 置空
+                if not self._launched_browser_alive():
+                    return False
+                try:
+                    if self._try_connect():
+                        return True
+                except BrowserConnectError as exc:
+                    if _is_foreign_browser_error(exc):
+                        raise
+                time.sleep(min(0.5, max(0.01, grace_deadline - time.time())))
+            return False
+        finally:
+            self._grace_spent += time.time() - grace_started
 
     def _kill_firefox_by_port(self, port):
         """通过 /proc 找到监听指定端口的进程并终止，避免误杀无关 Firefox。"""
@@ -1459,10 +1715,13 @@ class Firefox(object):
         except (ConnectionRefusedError, socket.timeout, OSError):
             return False
 
+        # 端口预留在这里不释放：握手失败只是中间态，进程和端口仍归我们；
+        # 连接成功后 Firefox 还在用这个端口。预留到 quit()/放弃启动时才归还，
+        # 否则并发实例会在我们的 Firefox 还没监听前把同一端口挑走。
         try:
             host, port = self._address.rsplit(":", 1)
             ws_url = get_bidi_ws_url(host, int(port), timeout=5)
-            self._driver = BrowserBiDiDriver(self._address)
+            self._driver = self._new_driver()
             self._driver.start(ws_url)
             self._create_session()
             self._subscribe_events()
@@ -1470,35 +1729,57 @@ class Firefox(object):
             self._setup_download_behavior()
             if not self._wait_for_initial_context():
                 raise RuntimeError("Firefox 未返回可用的 browsingContext")
-            self._release_reserved_port()
             logger.info("已连接到 Firefox: %s", self._address)
             return True
         except BrowserConnectError:
-            # stuck session 错误需要向上传播
-            if self._driver:
-                try:
-                    self._driver.stop()
-                except Exception:
-                    with BrowserBiDiDriver._lock:
-                        BrowserBiDiDriver._BROWSERS.pop(self._address, None)
-                self._driver = None
-            self._release_reserved_port()
+            # stuck session / foreign browser 错误需要向上传播
+            self._discard_connection()
             raise
         except Exception as e:
             logger.debug("连接失败: %s", e)
-            if self._driver:
-                try:
-                    self._teardown_proxy_auth()
-                    # 使用 stop() 而非 _stop()，确保清理单例注册
-                    # 这样下次 _try_connect 会创建全新的 BrowserBiDiDriver
-                    self._driver.stop()
-                except Exception:
-                    # 即使 stop() 异常，也要手动清理单例
-                    with BrowserBiDiDriver._lock:
-                        BrowserBiDiDriver._BROWSERS.pop(self._address, None)
-                self._driver = None
-            self._release_reserved_port()
+            self._discard_connection()
             return False
+
+    def _discard_connection(self):
+        """撤下一次没成功的连接，把在它上面建出来的会话一并结束。
+
+        ``session.new`` 已成功、之后的步骤（如等首个 browsingContext）才失败时，
+        只断 WebSocket 会在**自己的** Firefox 上留下一个孤儿 session：下一次
+        ``_try_connect`` 就撞上「maximum number of sessions」，进入 6 秒的
+        孤儿回收重试，最后还得靳 browser.close 重启浏览器。高并发冷启动下
+        这条路很常见，是 issue #31 日志里「无法回收孤儿 session」的直接来源。
+        """
+        driver = self._driver
+        if driver is None:
+            self._owns_session = False
+            self._session_id = None
+            return
+
+        if self._owns_session:
+            try:
+                bidi_session.end(driver)
+            except Exception:
+                pass
+        self._owns_session = False
+        self._session_id = None
+
+        try:
+            self._teardown_proxy_auth()
+        except Exception:
+            pass
+        try:
+            # 使用 stop() 而非 _stop()，确保清理单例注册
+            driver.stop()
+        except Exception:
+            with BrowserBiDiDriver._lock:
+                BrowserBiDiDriver._BROWSERS.pop(self._address, None)
+        self._driver = None
+
+    def _new_driver(self):
+        """自己启动的 Firefox 不共用 driver 单例；显式 attach 的照旧复用。"""
+        return BrowserBiDiDriver(
+            self._address, shared=bool(self._options.is_existing_only)
+        )
 
     def _wait_for_initial_context(self, timeout=3.0, interval=0.1):
         deadline = time.time() + timeout
@@ -1625,6 +1906,8 @@ class Firefox(object):
 
         cmd = opts.build_command()
         logger.info("启动 Firefox: %s", " ".join(cmd))
+        # 新进程，旧的存活探测结果作废
+        self._liveness_cache = None
 
         try:
             # 在 Windows 上使用 CREATE_NO_WINDOW 避免弹出控制台
@@ -1678,10 +1961,67 @@ class Firefox(object):
 
     def _activate_session(self, result):
         """Record a new BiDi session and install its baseline preload."""
+        self._verify_session_ownership(result)
         self._session_id = result.get("sessionId", "")
         self._driver.session_id = self._session_id
         self._owns_session = True
         self._ensure_baseline_preload()
+
+    def _verify_session_ownership(self, result):
+        """确认连上的 Firefox 就是本实例启动的那个。
+
+        依据 ``session.new`` 返回的 ``moz:profile``：profile 目录每个实例独有，
+        对不上就说明端口撞车、连到了别的实例的浏览器。此时结束误建的会话、
+        断开连接并抛 :class:`_ForeignBrowserError`，由调用方换端口重启；
+        绝不能对它发 browser.close。
+
+        显式 attach 的地址是用户指定的，没有「自己的 profile」可比，跳过。
+        旧内核不返回 ``moz:profile`` 时放行但不标记为已确认。
+        """
+        capabilities = result.get("capabilities") or {}
+
+        pid = capabilities.get("moz:processID")
+        if isinstance(pid, int) and pid > 0:
+            self._browser_pid = pid
+
+        if self._options.is_existing_only:
+            return
+
+        theirs = capabilities.get("moz:profile")
+        mine = self._options.profile_path
+        if not theirs or not mine:
+            return
+
+        if _normalize_profile_path(theirs) == _normalize_profile_path(mine):
+            self._session_ownership_verified = True
+            return
+
+        logger.warning(
+            "%s 上的 Firefox 使用的 profile 是 %s，不是本实例的 %s",
+            self._address,
+            theirs,
+            mine,
+        )
+        driver = self._driver
+        if driver is not None:
+            try:
+                bidi_session.end(driver)
+            except Exception:
+                pass
+            try:
+                driver.stop()
+            except Exception:
+                with BrowserBiDiDriver._lock:
+                    BrowserBiDiDriver._BROWSERS.pop(self._address, None)
+        self._driver = None
+        self._session_id = None
+        self._owns_session = False
+        self._session_ownership_verified = False
+        raise _ForeignBrowserError(
+            "{} {} 上的 Firefox 不是本实例启动的（profile 不一致）".format(
+                _FOREIGN_BROWSER_MARKER, self._address
+            )
+        )
 
     def _create_session(self):
         """创建 BiDi 会话
@@ -1753,7 +2093,7 @@ class Firefox(object):
                 time.sleep(1)
                 try:
                     ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
-                    self._driver = BrowserBiDiDriver(self._address)
+                    self._driver = self._new_driver()
                     self._driver.start(ws_url)
 
                     # 先尝试 end 再 new
@@ -1790,14 +2130,37 @@ class Firefox(object):
                                 BrowserBiDiDriver._BROWSERS.pop(self._address, None)
                         self._driver = None
 
-            # 最后的兜底：发送 browser.close 让 Firefox 重启自身，
+            # 自己刚启动的 Firefox 不可能已经挂着别人的 session——走到这里
+            # 说明端口撞车，连上的是别的实例的浏览器。对它发 browser.close
+            # 会把别人的浏览器关掉（issue #31 里 Crash Reporter 的来源）。
+            # 归属未确认时：杀掉自己那个进程（如果有），换端口重启。
+            if not self._can_close_remote_browser():
+                if self._owns_launched_process():
+                    logger.warning(
+                        "无法回收孤儿 session 且 %s 上的浏览器归属未确认，"
+                        "终止本实例的 Firefox 进程后换端口重启...",
+                        self._address,
+                    )
+                    self._terminate_owned_process_tree()
+                else:
+                    logger.warning(
+                        "无法回收孤儿 session 且 %s 上的浏览器归属未确认，换端口重启...",
+                        self._address,
+                    )
+                raise _ForeignBrowserError(
+                    "{} {} 上的 Firefox 已被其他会话占用，不是本实例启动的".format(
+                        _FOREIGN_BROWSER_MARKER, self._address
+                    )
+                )
+
+            # 显式 attach 的地址：发送 browser.close 让 Firefox 重启自身，
             # 清理不可回收的孤儿 session
             logger.warning(
                 "无法回收孤儿 session，尝试通过 browser.close 重置 Firefox..."
             )
             try:
                 ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
-                self._driver = BrowserBiDiDriver(self._address)
+                self._driver = self._new_driver()
                 self._driver.start(ws_url)
                 self._driver.run("browser.close", timeout=3)
             except Exception:

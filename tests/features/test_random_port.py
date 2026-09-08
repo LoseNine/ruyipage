@@ -8,7 +8,16 @@ import ruyipage as ruyipage_module
 import ruyipage._base.browser as browser_module
 
 from ruyipage._base.browser import Firefox
-from ruyipage._configs.firefox_options import FirefoxOptions
+from ruyipage._configs.firefox_options import (
+    DEFAULT_RANDOM_PORT_END,
+    DEFAULT_RANDOM_PORT_START,
+    FirefoxOptions,
+)
+
+# Windows 默认 TCP 动态端口段（netsh int ipv4 show dynamicport tcp）。
+WINDOWS_DYNAMIC_PORT_START = 49152
+# Linux 默认 ip_local_port_range 下界，比 Windows 的动态端口段更低。
+LINUX_DYNAMIC_PORT_START = 32768
 
 
 class _FakeSocket:
@@ -41,7 +50,7 @@ def test_default_free_port_selection_uses_random_high_range(monkeypatch):
 
     port = browser._find_free_port()
 
-    assert 10000 <= port <= 65535
+    assert DEFAULT_RANDOM_PORT_START <= port <= DEFAULT_RANDOM_PORT_END
     assert port != 9222
 
 
@@ -79,6 +88,30 @@ def test_set_random_port_uses_custom_range(monkeypatch):
 def test_set_random_port_rejects_invalid_range():
     with pytest.raises(ValueError):
         FirefoxOptions().set_random_port(start=10000, end=9999)
+
+
+def test_default_random_port_range_avoids_os_dynamic_ports():
+    """默认随机端口范围不能与系统 TCP 动态端口段重叠。
+
+    动态端口段内的端口会被系统分配给出站连接的源端口，可能在我们探测到
+    端口可用之后、Firefox 真正监听之前把端口抢走。
+    """
+    start, end = FirefoxOptions().random_port_range
+
+    assert (start, end) == (DEFAULT_RANDOM_PORT_START, DEFAULT_RANDOM_PORT_END)
+    assert 1025 <= start <= end
+    assert end < WINDOWS_DYNAMIC_PORT_START
+    assert end < LINUX_DYNAMIC_PORT_START
+    # 仍要留足端口空间，避免并发实例互相撞车。
+    assert end - start >= 10000
+
+
+def test_set_random_port_still_allows_explicit_dynamic_range():
+    """收窄的只是默认值，用户显式指定的范围照旧生效。"""
+    opts = FirefoxOptions().set_random_port(start=49152, end=65535)
+
+    assert opts.random_port is True
+    assert opts.random_port_range == (49152, 65535)
 
 
 def test_existing_only_disables_random_port_mode():
@@ -170,7 +203,9 @@ def test_bidi_server_default_options_use_random_high_port(monkeypatch):
     server.connect()
 
     selected_port = server._options.port
-    assert 10000 <= selected_port <= 65535
+    assert (
+        DEFAULT_RANDOM_PORT_START <= selected_port <= DEFAULT_RANDOM_PORT_END
+    )
     assert selected_port != 9222
     assert "--remote-debugging-port={}".format(selected_port) in commands[0]
     assert waited == [("127.0.0.1", selected_port)]

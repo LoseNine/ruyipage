@@ -11,7 +11,10 @@ from urllib.parse import unquote, urlsplit
 DEFAULT_REMOTE_DEBUGGING_PORT = 9222
 DEFAULT_DEBUGGER_PORT = 6000
 DEFAULT_RANDOM_PORT_START = 10000
-DEFAULT_RANDOM_PORT_END = 65535
+# 上界压在系统 TCP 动态端口段之下（Windows 默认 49152 起，Linux 32768 起）。
+# 动态端口段里的端口会被内核随时分给出站连接做源端口，可能在我们探测到
+# 「可用」之后、Firefox 真正 bind 之前被抢走。
+DEFAULT_RANDOM_PORT_END = 32767
 UINT32_MAX = (2**32) - 1
 _SYSTEM_ACCESS_ARGUMENTS = {
     "-remote-allow-system-access",
@@ -97,6 +100,8 @@ class FirefoxOptions(object):
         self._high_density_mode_enabled = False
         self._retry_times = 10
         self._retry_interval = 2.0
+        # 启动宽限期（秒）。None 表示按 retry 预算自动推算，0 关闭。
+        self._retry_grace = None
         self._proxy = None
         self._auto_port = False
         self._random_port = True
@@ -193,6 +198,11 @@ class FirefoxOptions(object):
     @property
     def retry_interval(self):
         return self._retry_interval
+
+    @property
+    def retry_grace(self):
+        """启动宽限期（秒）；None 表示自动推算。"""
+        return self._retry_grace
 
     @property
     def proxy(self):
@@ -655,7 +665,7 @@ class FirefoxOptions(object):
         Args:
             on_off: True 启用随机端口，False 关闭随机端口
             start: 随机端口起始值，默认 10000
-            end: 随机端口结束值，默认 65535
+            end: 随机端口结束值，默认 32767（避开系统动态端口段）
 
         Returns:
             self
@@ -675,12 +685,16 @@ class FirefoxOptions(object):
         self._random_port_end = end
         return self
 
-    def set_retry(self, times=None, interval=None):
+    def set_retry(self, times=None, interval=None, grace=None):
         """设置连接重试
 
         Args:
             times: 重试次数
             interval: 重试间隔（秒）
+            grace: 启动宽限期（秒）。retry 预算耗尽后，只要 Firefox 进程还
+                活着就再等这么久，而不是立刻判死重启。并发启动多个实例时
+                Windows 冷启动会明显变慢，默认按 retry 预算自动推算；
+                传 0 关闭宽限等待，恢复快速失败。
 
         Returns:
             self
@@ -689,6 +703,11 @@ class FirefoxOptions(object):
             self._retry_times = times
         if interval is not None:
             self._retry_interval = interval
+        if grace is not None:
+            grace = float(grace)
+            if grace < 0:
+                raise ValueError("grace 不能为负数")
+            self._retry_grace = grace
         return self
 
     def copy(self):
