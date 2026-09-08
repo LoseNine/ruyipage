@@ -2130,6 +2130,20 @@ FingerprintError
 [`ruyipage/_fingerprint/README.md`](ruyipage/_fingerprint/README.md)
 与示例 `examples/48_smart_fingerprint.py`。
 
+### fpfile 指纹字段完整说明
+
+上面的智能指纹 API 会自动写出 `fpfile`，多数场景无需手动干预。当你需要**固定某台
+真机机型**、**手动调整智能指纹未覆盖的字段**（WebGPU、语音列表、地理位置细项等），
+或**只用内核不经过 ruyiPage** 时，`fpfile` 的每一个字段——取值范围、别名、默认值、
+影响的 JS/HTTP API、以及对应检测点的验收方法——都记录在：
+
+**[`fingerprint/fpfile指纹说明.md`](fingerprint/fpfile%E6%8C%87%E7%BA%B9%E8%AF%B4%E6%98%8E.md)**
+（English: [`fpfile-fingerprint.md`](fingerprint/fpfile-fingerprint.md)）
+
+覆盖自动化检测、硬件/设备、Canvas、WebGL、音频、字体、Navigator 一致性、
+WebRTC/媒体、时区/语言、反 Hook 十类检测点，外加网络代理与认证、WebGPU、
+必填清单和一键自检脚本。
+
 ---
 
 ## 协议来源

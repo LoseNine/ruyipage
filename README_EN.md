@@ -2052,6 +2052,14 @@ By default, smart fingerprinting adds an `about:blank` startup page so the BiDi 
 - WebRTC remains in Firefox native ICE mode unless real addresses are supplied through `webrtc_local_ipv4/ipv6` or `webrtc_public_ipv4/ipv6`. Native ICE may expose a direct srflx address different from HTTP proxy egress; `local_webrtc_*` controls literal exposure of matching host addresses and does not filter every host candidate.
 - Geolocation latitude, longitude, accuracy, altitude, altitude accuracy, heading, and speed are shared across fpfile and BiDi. A numeric `geolocation_timestamp` is Unix epoch milliseconds; timestamps and `prompt`/`denied` permission states stay kernel-managed because BiDi does not represent them.
 
+### Full fpfile field reference
+
+The smart fingerprint API writes the `fpfile` for you, so most callers never touch it by hand. When you need to **pin a specific real-machine profile**, **tune fields the smart flow does not cover** (WebGPU, voice lists, geolocation details, and so on), or **use the kernel without ruyiPage**, every `fpfile` field — value ranges, aliases, defaults, the JS/HTTP APIs it affects, and how to verify each detection point — is documented in:
+
+**[`fingerprint/fpfile-fingerprint.md`](fingerprint/fpfile-fingerprint.md)** (Chinese version: [`fpfile指纹说明.md`](fingerprint/fpfile%E6%8C%87%E7%BA%B9%E8%AF%B4%E6%98%8E.md))
+
+It covers all ten detection categories (automation detection, hardware/device, Canvas, WebGL, audio, fonts, Navigator consistency, WebRTC/media, timezone/language, anti-hook), plus network proxy and auth, WebGPU, a required-keys checklist, and a one-shot self-check script.
+
 ---
 
 ## Protocol Source
