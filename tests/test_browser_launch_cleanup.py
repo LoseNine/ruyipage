@@ -146,12 +146,18 @@ def test_force_quit_terminates_owned_process_tree(monkeypatch):
     monkeypatch.setattr(
         browser_module.subprocess,
         "run",
-        lambda command, **kwargs: taskkill_calls.append(command),
+        lambda command, **kwargs: taskkill_calls.append((command, kwargs)),
     )
 
     browser.quit(force=True)
 
-    assert taskkill_calls == [["taskkill", "/F", "/T", "/PID", "3001"]]
+    assert len(taskkill_calls) == 1
+    command, kwargs = taskkill_calls[0]
+    assert command == ["taskkill", "/F", "/T", "/PID", "3001"]
+    assert kwargs["creationflags"] == browser_module._CREATE_NO_WINDOW
+    assert kwargs["stdout"] == browser_module.subprocess.DEVNULL
+    assert kwargs["stderr"] == browser_module.subprocess.DEVNULL
+    assert kwargs["check"] is False
     assert process.events == [("wait", 5)]
     assert browser._process is None
 

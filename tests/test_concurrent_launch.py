@@ -973,7 +973,7 @@ def _fake_process_table(rows):
         ]
     ).encode("utf-8")
 
-    def check_output(cmd, stderr=None, timeout=None):
+    def check_output(cmd, timeout=None):
         assert "Win32_Process" in cmd[-1]
         return payload
 
@@ -998,8 +998,8 @@ def test_windows_kill_targets_the_real_root_not_the_exited_stub(monkeypatch, tmp
 
     monkeypatch.setattr(browser_module.sys, "platform", "win32")
     monkeypatch.setattr(
-        browser_module.subprocess,
-        "check_output",
+        browser_module,
+        "_check_output_hidden",
         _fake_process_table(
             [
                 # 别人的 Firefox：同名进程、不同 profile，不能碰
@@ -1013,8 +1013,8 @@ def test_windows_kill_targets_the_real_root_not_the_exited_stub(monkeypatch, tmp
     )
     killed = []
     monkeypatch.setattr(
-        browser_module.subprocess,
-        "run",
+        browser_module,
+        "_run_hidden",
         lambda cmd, **kwargs: killed.append(int(cmd[cmd.index("/PID") + 1])),
     )
 
@@ -1097,11 +1097,11 @@ def test_windows_kill_also_uses_moz_process_id_when_known(monkeypatch, tmp_path)
     browser._browser_pid = 4200
 
     monkeypatch.setattr(browser_module.sys, "platform", "win32")
-    monkeypatch.setattr(browser_module.subprocess, "check_output", _fake_process_table([]))
+    monkeypatch.setattr(browser_module, "_check_output_hidden", _fake_process_table([]))
     killed = []
     monkeypatch.setattr(
-        browser_module.subprocess,
-        "run",
+        browser_module,
+        "_run_hidden",
         lambda cmd, **kwargs: killed.append(int(cmd[cmd.index("/PID") + 1])),
     )
 
@@ -1122,11 +1122,11 @@ def test_windows_kill_survives_a_failed_process_table_query(monkeypatch, tmp_pat
     def boom(*args, **kwargs):
         raise OSError("powershell missing")
 
-    monkeypatch.setattr(browser_module.subprocess, "check_output", boom)
+    monkeypatch.setattr(browser_module, "_check_output_hidden", boom)
     killed = []
     monkeypatch.setattr(
-        browser_module.subprocess,
-        "run",
+        browser_module,
+        "_run_hidden",
         lambda cmd, **kwargs: killed.append(int(cmd[cmd.index("/PID") + 1])),
     )
 

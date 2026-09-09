@@ -80,6 +80,45 @@ DEFAULT_FIREFOX_COMMANDLINE_PATTERNS = (
 )
 
 
+# Windows 上每个子进程默认会开一个控制台窗口。查进程表和 taskkill 都是内部
+# 实现细节，并发关浏览器时会闪出成片黑窗，必须显式隐藏。
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _hidden_process_kwargs():
+    """让辅助子进程（taskkill / powershell）不弹控制台窗口。
+
+    ``CREATE_NO_WINDOW`` 阻止分配新控制台；``STARTUPINFO`` + ``SW_HIDE``
+    再藏一次，避免部分环境下窗口仍闪一下。``sys.platform`` 决定是否传
+    Windows 专有参数，方便测试在非 Windows 上覆盖这条路径。
+    """
+    if sys.platform != "win32":
+        return {}
+    kwargs = {"creationflags": _CREATE_NO_WINDOW}
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
+def _run_hidden(cmd, **kwargs):
+    """执行一个不产生窗口、不打扰调用方的辅助命令。"""
+    kwargs.setdefault("stdout", subprocess.DEVNULL)
+    kwargs.setdefault("stderr", subprocess.DEVNULL)
+    kwargs.setdefault("check", False)
+    kwargs.update(_hidden_process_kwargs())
+    return subprocess.run(cmd, **kwargs)
+
+
+def _check_output_hidden(cmd, **kwargs):
+    """读取一个辅助命令的输出，同样不产生窗口。"""
+    kwargs.setdefault("stderr", subprocess.DEVNULL)
+    kwargs.update(_hidden_process_kwargs())
+    return subprocess.check_output(cmd, **kwargs)
+
+
 def _is_valid_context_id(context_id):
     return isinstance(context_id, str) and bool(context_id)
 
@@ -408,9 +447,8 @@ def find_existing_browsers_by_process(
             "ConvertTo-Json -Compress"
         )
         try:
-            out = subprocess.check_output(
+            out = _check_output_hidden(
                 ["powershell", "-NoProfile", "-Command", ps_proc],
-                stderr=subprocess.DEVNULL,
             )
             import json
 
@@ -437,9 +475,8 @@ def find_existing_browsers_by_process(
                 "ConvertTo-Json -Compress"
             )
             try:
-                out = subprocess.check_output(
+                out = _check_output_hidden(
                     ["powershell", "-NoProfile", "-Command", ps_net],
-                    stderr=subprocess.DEVNULL,
                 )
                 import json
 
@@ -518,9 +555,8 @@ def find_candidate_ports_by_process(
             "ConvertTo-Json -Compress"
         )
         try:
-            out = subprocess.check_output(
+            out = _check_output_hidden(
                 ["powershell", "-NoProfile", "-Command", ps_proc],
-                stderr=subprocess.DEVNULL,
             )
             import json
 
@@ -547,9 +583,8 @@ def find_candidate_ports_by_process(
                 "ConvertTo-Json -Compress"
             )
             try:
-                out = subprocess.check_output(
+                out = _check_output_hidden(
                     ["powershell", "-NoProfile", "-Command", ps_net],
-                    stderr=subprocess.DEVNULL,
                 )
                 import json
 
@@ -804,12 +839,7 @@ class Firefox(object):
         pids.update(self._find_own_firefox_pids_windows())
 
         for pid in pids:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            _run_hidden(["taskkill", "/F", "/T", "/PID", str(pid)])
         if process is not None:
             try:
                 process.wait(timeout=timeout)
@@ -846,9 +876,8 @@ class Firefox(object):
             "ConvertTo-Json -Compress"
         ).format(name_filter)
         try:
-            out = subprocess.check_output(
+            out = _check_output_hidden(
                 ["powershell", "-NoProfile", "-Command", script],
-                stderr=subprocess.DEVNULL,
                 timeout=15,
             )
             data = json.loads(out.decode(errors="ignore") or "[]")
@@ -1519,9 +1548,8 @@ class Firefox(object):
                 "ConvertTo-Json -Compress"
             )
             try:
-                out = subprocess.check_output(
+                out = _check_output_hidden(
                     ["powershell", "-NoProfile", "-Command", ps_net],
-                    stderr=subprocess.DEVNULL,
                 )
                 data = json.loads(out.decode(errors="ignore") or "[]")
                 if isinstance(data, dict):
@@ -1552,9 +1580,8 @@ class Firefox(object):
                 "ConvertTo-Json -Compress"
             )
             try:
-                out = subprocess.check_output(
+                out = _check_output_hidden(
                     ["powershell", "-NoProfile", "-Command", ps_proc],
-                    stderr=subprocess.DEVNULL,
                 )
                 data = json.loads(out.decode(errors="ignore") or "[]")
                 if isinstance(data, dict):
@@ -1579,12 +1606,7 @@ class Firefox(object):
                     if not (name_ok or cmd_ok):
                         continue
                     logger.debug("找到端口 %d 的 Firefox 进程 PID=%d，正在终止", port, pid)
-                    subprocess.run(
-                        ["taskkill", "/F", "/PID", str(pid)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
+                    _run_hidden(["taskkill", "/F", "/PID", str(pid)])
                     return
             except Exception as e:
                 logger.debug("按 PID 查询 Windows Firefox 进程失败: %s", e)

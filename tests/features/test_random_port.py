@@ -245,7 +245,7 @@ def test_windows_kill_firefox_by_port_targets_owning_pid(monkeypatch):
     browser = _make_browser(FirefoxOptions())
     killed = []
 
-    def fake_check_output(command, stderr=None):
+    def fake_check_output(command, **kwargs):
         script = command[-1]
         if "Get-CimInstance Win32_Process" in script:
             return json.dumps(
@@ -288,9 +288,78 @@ def test_windows_kill_firefox_by_port_targets_owning_pid(monkeypatch):
         return Result()
 
     monkeypatch.setattr(browser_module.sys, "platform", "win32")
-    monkeypatch.setattr(browser_module.subprocess, "check_output", fake_check_output)
-    monkeypatch.setattr(browser_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(browser_module, "_check_output_hidden", fake_check_output)
+    monkeypatch.setattr(browser_module, "_run_hidden", fake_run)
 
     browser._kill_firefox_by_port(12000)
 
     assert killed == [["taskkill", "/F", "/PID", "4242"]]
+
+
+def test_windows_helper_processes_never_open_a_console_window(monkeypatch):
+    """辅助进程必须带 CREATE_NO_WINDOW。
+
+    并发关浏览器时每个实例都要查进程表并 taskkill，少了这个标志会在桌面上
+    闪出成片黑色控制台窗口。
+    """
+    seen = []
+
+    class FakeStartupInfo:
+        def __init__(self):
+            self.dwFlags = 0
+            self.wShowWindow = None
+
+    def record_run(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    def record_check_output(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        return b"[]"
+
+    monkeypatch.setattr(browser_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        browser_module.subprocess, "STARTUPINFO", FakeStartupInfo, raising=False
+    )
+    monkeypatch.setattr(
+        browser_module.subprocess, "STARTF_USESHOWWINDOW", 0x01, raising=False
+    )
+    monkeypatch.setattr(browser_module.subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(browser_module.subprocess, "run", record_run)
+    monkeypatch.setattr(browser_module.subprocess, "check_output", record_check_output)
+
+    browser_module._run_hidden(["taskkill", "/F", "/PID", "1"])
+    browser_module._check_output_hidden(["powershell", "-NoProfile", "-Command", "x"])
+
+    assert len(seen) == 2
+    for _, kwargs in seen:
+        assert kwargs.get("creationflags") == browser_module._CREATE_NO_WINDOW
+        startupinfo = kwargs.get("startupinfo")
+        assert isinstance(startupinfo, FakeStartupInfo)
+        assert startupinfo.dwFlags & browser_module.subprocess.STARTF_USESHOWWINDOW
+        assert startupinfo.wShowWindow == browser_module.subprocess.SW_HIDE
+
+    run_kwargs = seen[0][1]
+    assert run_kwargs["stdout"] == browser_module.subprocess.DEVNULL
+    assert run_kwargs["stderr"] == browser_module.subprocess.DEVNULL
+    assert run_kwargs["check"] is False
+
+    check_output_kwargs = seen[1][1]
+    assert check_output_kwargs["stderr"] == browser_module.subprocess.DEVNULL
+
+
+def test_helper_processes_do_not_pass_windows_flags_elsewhere(monkeypatch):
+    """CREATE_NO_WINDOW 是 Windows 专有的，别的平台传了会报错。"""
+    seen = []
+    monkeypatch.setattr(browser_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        browser_module.subprocess, "run", lambda cmd, **kw: seen.append(kw)
+    )
+
+    browser_module._run_hidden(["kill", "-9", "1"])
+
+    assert "creationflags" not in seen[0]
