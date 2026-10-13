@@ -35,7 +35,7 @@
 <table>
 
 <tr>
-<td width="180"><a href="http://www.fastaitoken.com/register"><img src="images/fastaitoken.svg" alt="FastAIToken" width="150"></a></td>
+<td width="180"><a href="http://www.fastaitoken.com/register"><img src="images/fastaitoken.jpg" alt="FastAIToken" width="150"></a></td>
 <td>🎉 Thanks to FastAIToken for sponsoring this project! <a href="http://www.fastaitoken.com/register">FastAIToken</a> is an AI API aggregation platform built for developers, supporting OpenAI, Claude, Gemini and other mainstream large models. Top-ups are 1:1 — 1 CNY = 1 USD of API credit — so developers can reach the world's leading models at a lower cost and with less friction.<br>
 
 🚀 Multiple routes are available: an ultra-cheap 0.02x OpenAI promotional group (limited time), a 0.25x OpenAI group, 0.7x Claude with 95% fixed caching, and a 1.2x Claude Max route. A public status page shows the availability, latency, and health of every group in real time, and 7×24 human technical support (not a bot) responds quickly to developer requests.<br>
