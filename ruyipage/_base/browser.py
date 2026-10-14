@@ -27,7 +27,7 @@ from .._bidi import network as bidi_network
 from .._bidi import session as bidi_session
 from .._bidi import browsing_context as bidi_context
 from .._bidi import script as bidi_script
-from ..errors import BrowserConnectError, BrowserLaunchError
+from ..errors import BiDiError, BrowserConnectError, BrowserLaunchError
 
 logger = logging.getLogger("ruyipage")
 
@@ -1160,18 +1160,29 @@ class Firefox(object):
         Returns:
             FirefoxTab
         """
-        ref_ctx = self._context_ids[0] if self._context_ids else None
-        params = {"type": "tab", "background": background}
-        if ref_ctx:
-            params["referenceContext"] = ref_ctx
+        # 总以后台方式 create，前台需求改由随后的 activate 完成。前台 create 会在
+        # Firefox 内部等待「当前选中 tab」变为 hidden，若它此刻被并发关闭，create
+        # 报 no such frame (DiscardedBrowsingContextError)，而新 tab 已经建好，
+        # 调用方拿不到它的 ID，成了关不掉的孤儿（issue #32）。
+        params = {"type": "tab", "background": True}
         if user_context:
             params["userContext"] = user_context
 
-        result = self._driver.run("browsingContext.create", params)
-        ctx_id = result.get("context", "")
+        ctx_id = self._create_tab_context(params)
 
-        if ctx_id and ctx_id not in self._context_ids:
-            self._context_ids.append(ctx_id)
+        with self._context_ids_lock:
+            if ctx_id and ctx_id not in self._context_ids:
+                self._context_ids.append(ctx_id)
+
+        if not background:
+            try:
+                bidi_context.activate(self._driver, ctx_id)
+            except BiDiError as e:
+                # activate 先发起切换，再等原选中 tab 变 hidden。原 tab 被并发关闭
+                # 只会让这一步等待失败，切换本身照常完成。
+                if e.error != "no such frame":
+                    raise
+                logger.debug("激活新标签页 %s 时原选中 tab 已关闭: %s", ctx_id, e)
 
         tab = self._get_or_create_tab(ctx_id)
 
@@ -1179,6 +1190,32 @@ class Firefox(object):
             tab.get(url)
 
         return tab
+
+    def _create_tab_context(self, params):
+        """执行 browsingContext.create，返回新 context ID。
+
+        referenceContext 取缓存里的第一个 tab，决定新 tab 进哪个窗口、排在哪。
+        缓存靠异步事件维护，可能还留着刚被并发关闭的 tab。后台 create 时
+        no such frame 只会来自 referenceContext 校验，且发生在建 tab 之前，
+        所以去掉参考 tab 重试一次不会多开。
+        """
+        with self._context_ids_lock:
+            ref_ctx = self._context_ids[0] if self._context_ids else None
+
+        if ref_ctx:
+            try:
+                result = self._driver.run(
+                    "browsingContext.create",
+                    dict(params, referenceContext=ref_ctx),
+                )
+                return result.get("context", "")
+            except BiDiError as e:
+                if e.error != "no such frame":
+                    raise
+                logger.debug("参考标签页 %s 已关闭，不带参考重试: %s", ref_ctx, e)
+                self._on_context_destroyed({"context": ref_ctx})
+
+        return self._driver.run("browsingContext.create", params).get("context", "")
 
     def new_container_tab(self, url=None, background=False):
         """创建一个新的 Firefox container tab。"""
